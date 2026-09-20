@@ -14,7 +14,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies & Build Web
         run: |
@@ -36,4 +36,3 @@ jobs:
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          
