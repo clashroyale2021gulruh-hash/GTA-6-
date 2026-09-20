@@ -9,23 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-v: 18
+          node-version: 18
 
       - name: Install dependencies & Build Web
         run: |
           npm install
           npm run build
 
-      - name: Setup Capacitor & Android
+      - name: Sync Capacitor Android
         run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "GTA 6 Companion" "com.gta6.companion" --web-dir dist
-          npx cap add android
           npx cap sync android
 
       - name: Build APK with Gradle
@@ -39,4 +36,4 @@ jobs:
         with:
           name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
-
+          
