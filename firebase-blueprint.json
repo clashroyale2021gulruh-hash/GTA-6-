@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "CheatItem": {
+      "title": "CheatItem",
+      "description": "GTA 6 cheat code for PS5, Xbox, and smartphone",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "enum": ["player", "weapons", "vehicles", "world"] },
+        "description": { "type": "string", "maxLength": 500 },
+        "codes": {
+          "type": "object",
+          "properties": {
+            "ps5": { "type": "array", "items": { "type": "string" } },
+            "xbox": { "type": "array", "items": { "type": "string" } },
+            "phone": { "type": "string", "maxLength": 100 }
+          },
+          "required": ["ps5", "xbox", "phone"]
+        },
+        "isPremium": { "type": "boolean" }
+      },
+      "required": ["title", "category", "description", "codes"]
+    },
+    "NewsArticle": {
+      "title": "NewsArticle",
+      "description": "GTA 6 news, trailers, and video analysis articles",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 300 },
+        "summary": { "type": "string", "maxLength": 1000 },
+        "fullText": { "type": "string", "maxLength": 5000 },
+        "tag": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 50 },
+        "readTime": { "type": "string", "maxLength": 50 },
+        "image": { "type": "string", "maxLength": 1000 },
+        "youtubeId": { "type": "string", "maxLength": 50 },
+        "videoUrl": { "type": "string", "maxLength": 1000 },
+        "videoDuration": { "type": "string", "maxLength": 50 },
+        "sourceName": { "type": "string", "maxLength": 100 },
+        "sourceUrl": { "type": "string", "maxLength": 1000 },
+        "isPremium": { "type": "boolean" }
+      },
+      "required": ["title", "summary", "tag", "image", "sourceName", "sourceUrl"]
+    },
+    "UserFavorites": {
+      "title": "UserFavorites",
+      "description": "User saved favorites and preferences",
+      "type": "object",
+      "properties": {
+        "savedNews": { "type": "array", "items": { "type": "string" } },
+        "savedCheats": { "type": "array", "items": { "type": "string" } },
+        "unlockedItems": { "type": "array", "items": { "type": "string" } },
+        "freeUnlocks": { "type": "number" },
+        "isVip": { "type": "boolean" },
+        "vipInvoiceId": { "type": "string", "maxLength": 100 },
+        "vipVerifiedAt": { "type": "string", "maxLength": 100 },
+        "vipAmount": { "type": "string", "maxLength": 50 },
+        "vipAsset": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "maxLength": 100 }
+      }
+    }
+  },
+  "firestore": {
+    "/cheats/{cheatId}": {
+      "schema": { "$ref": "#/entities/CheatItem" },
+      "description": "Catalog of GTA 6 controller and smartphone cheats"
+    },
+    "/news/{newsId}": {
+      "schema": { "$ref": "#/entities/NewsArticle" },
+      "description": "Collection of GTA 6 news and video reports"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserFavorites" },
+      "description": "User saved favorites and preferences sync"
+    }
+  }
+}

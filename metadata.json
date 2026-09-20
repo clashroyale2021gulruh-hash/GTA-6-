@@ -1,0 +1,6 @@
+{
+  "name": "GTA 6 Companion & AI Analyzer",
+  "description": "Премиальное мобильное приложение-компаньон GTA 6: точный таймер релиза, база читов (PS5 / Xbox), интерактивные новости с видеоплеером и первоисточниками, профиль и избранное.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
