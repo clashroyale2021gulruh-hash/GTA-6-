@@ -16,6 +16,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
       - name: Install dependencies & Build Web
         run: |
           npm install
