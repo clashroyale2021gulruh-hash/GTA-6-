@@ -57,13 +57,13 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   updateProfile,
   signOut,
-  onAuthStateChanged,
-  deleteUser
+  onAuthStateChanged
 } from 'firebase/auth';
 import {
   sanitizeDisplayName,
@@ -327,6 +327,56 @@ const FALLBACK_CHEATS: CheatItem[] = [
 
 const FALLBACK_NEWS: NewsItem[] = [
   {
+    id: 'news_trailer_2_release',
+    title: 'Rockstar Games представила Трейлер 2: Вайс-Сити, Джейсон и новая физика',
+    tag: 'ТРЕЙЛЕР',
+    date: '20 Сентября 2026',
+    readTime: '4 мин',
+    image: 'https://img.youtube.com/vi/kYJzEwXzH_8/maxresdefault.jpg',
+    youtubeId: 'kYJzEwXzH_8',
+    videoUrl: 'https://www.youtube.com/watch?v=kYJzEwXzH_8',
+    videoDuration: '02:45',
+    summary: 'Долгожданный второй официальный трейлер GTA VI вышел! В ролике подробно показан Джейсон, ночной Вайс-Сити, катера и масштабные погони полиции округа Леонида.',
+    content: [
+      'Студия Rockstar Games официально опубликовала Трейлер 2 Grand Theft Auto VI, произведя колоссальный фурор в мировом игровом сообществе.',
+      'Трейлер сосредоточен на втором протагонисте Джейсоне, его взаимоотношениях с Люсией, подготовке дерзких ограблений и исследовании ночной жизни Вайс-Сити.',
+      'Ролик демонстрирует беспрецедентный уровень детализации: реалистичные волны и гидродинамика, густая растительность болот Грассриверс, неоновые отражения на мокром асфальте и сотни уникальных моделей NPC с живым поведением.'
+    ],
+    keyFacts: [
+      'Второй официальный трейлер Grand Theft Auto VI уже доступен',
+      'Фокус на персонаже Джейсоне и совместных налетах дуэта с Люсией',
+      'Показаны новые локации: округ Келли, порт Вайс и тропические острова Леониды',
+      'Запись сделана напрямую на PlayStation 5 в реальном времени'
+    ],
+    sourceName: 'Rockstar Games YouTube & Newswire',
+    sourceUrl: 'https://www.rockstargames.com/VI'
+  },
+  {
+    id: 'news_gameplay_deep_dive',
+    title: 'Детальный геймплей GTA VI: физика перестрелок, инвентарь и ИИ полиции',
+    tag: 'ТРЕЙЛЕР',
+    date: '19 Сентября 2026',
+    readTime: '6 мин',
+    image: 'https://img.youtube.com/vi/VpC2u_2hV60/maxresdefault.jpg',
+    youtubeId: 'VpC2u_2hV60',
+    videoUrl: 'https://www.youtube.com/watch?v=VpC2u_2hV60',
+    videoDuration: '10:30',
+    summary: 'Rockstar раскрыла детальный геймплей игры: переработанная баллистика, тактическое переключение между героями, багажник оружия и умный ИИ полиции.',
+    content: [
+      'Rockstar Games выпустила масштабный обзор игрового процесса GTA VI, подтвердивший эволюционный скачок в симуляции открытого мира.',
+      'В демонстрации раскрыта механика инвентаря: тяжелое оружие теперь хранится в багажнике личного автомобиля, а персонажи могут скрытно носить лишь пистолеты и компактные ПП.',
+      'Полиция округа Леонида получила обновленную тактику координации: патрульные перекрывают перекрестки, вызывают воздушную поддержку и оцепляют районы с помощью шипов и броневиков.'
+    ],
+    keyFacts: [
+      'Реалистичный инвентарь с ограничением переносимого оружия и багажником авто',
+      'Бесшовное тактическое переключение между Люсией и Джейсоном в миссиях',
+      'Продвинутый ИИ блюстителей порядка и свидетелей преступлений',
+      'Полная интерактивность интерьеров магазинов, мотелей и ломбардов'
+    ],
+    sourceName: 'Rockstar Games Gameplay Showcase',
+    sourceUrl: 'https://www.rockstargames.com/VI'
+  },
+  {
     id: 'news_t2_release_2026',
     title: 'Take-Two подтвердила окно релиза GTA VI — осень 2026 года',
     tag: 'ОФИЦИАЛЬНО',
@@ -349,30 +399,6 @@ const FALLBACK_NEWS: NewsItem[] = [
     ],
     sourceName: 'Take-Two Interactive / SEC Filings',
     sourceUrl: 'https://www.take2games.com'
-  },
-  {
-    id: 'news_trailer_2_leaks',
-    title: 'Rockstar готовит Трейлер 2: упор на Джейсона и систему ограблений',
-    tag: 'ИНСАЙДЫ',
-    date: '15 Сентября 2026',
-    readTime: '5 мин',
-    image: 'https://img.youtube.com/vi/kYJzEwXzH_8/maxresdefault.jpg',
-    youtubeId: 'kYJzEwXzH_8',
-    videoUrl: 'https://www.youtube.com/watch?v=kYJzEwXzH_8',
-    videoDuration: '14:22',
-    summary: 'Второй трейлер сфокусирован на Джейсоне, механике доверия напарников и подготовке дерзких налетов на округ Вайс.',
-    content: [
-      'По данным инсайдеров, второй официальный трейлер покажет точку зрения Джейсона и раскроет механику совместных ограблений дуэта.',
-      'Игроки смогут координировать действия Люсии и Джейсона: один отвлекает охрану или взламывает замки, второй контролирует зал с заложниками.',
-      'Также будет показана расширенная карта за пределами Вайс-Сити — округ Келли, аэропорт и загородные мотели.'
-    ],
-    keyFacts: [
-      'Демонстрация системы переключения между героями в стиле Bonnie & Clyde',
-      'Интерактивное планирование налетов через багажник личного автомобиля',
-      'Глубокая реакция NPC на направленное оружие и угрозы'
-    ],
-    sourceName: 'Rockstar Universe & GTA Base',
-    sourceUrl: 'https://www.gtabase.com'
   },
   {
     id: 'news_vice_city_map_scale',
@@ -545,16 +571,7 @@ export default function App() {
 
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
-
-  // In-App Authentication State (Email/Password, Registration, Password Reset)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authModalTab, setAuthModalTab] = useState<'login' | 'register' | 'forgot'>('login');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
-  const [authDisplayName, setAuthDisplayName] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
 
   // Online / Offline state for robust network resilience
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -595,9 +612,9 @@ export default function App() {
   const [favoriteNews, setFavoriteNews] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('gta6_fav_news_v3');
-      return saved ? JSON.parse(saved) : ['news_1'];
+      return saved ? JSON.parse(saved) : ['news_trailer_2_release'];
     } catch {
-      return ['news_1'];
+      return ['news_trailer_2_release'];
     }
   });
 
@@ -1446,10 +1463,27 @@ export default function App() {
 
   // Listen to Firebase Auth state on mount (Source of Truth)
   useEffect(() => {
+    // Check if user just redirected back from Google Sign-In
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result?.user) {
+          const u = result.user;
+          const uid = u.uid;
+          const email = u.email || '';
+          const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
+          const photo = u.photoURL || GTA_AVATARS[0].url;
+          await completeSuccessfulLogin(uid, email, name, photo, 'google');
+          showToast(`Вход выполнен! Добро пожаловать, ${name}!`);
+        }
+      })
+      .catch((err) => {
+        console.warn('Google redirect result notice:', err);
+      });
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser && currentUser.email) {
+      if (currentUser && (currentUser.email || currentUser.uid)) {
         const uid = currentUser.uid;
-        const emailKey = currentUser.email.replace(/[^a-zA-Z0-9_]/g, '_');
+        const emailKey = currentUser.email ? currentUser.email.replace(/[^a-zA-Z0-9_]/g, '_') : uid;
         try {
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('timeout')), 3000)
@@ -1470,8 +1504,8 @@ export default function App() {
             const u = snap.data();
             const profile: UserProfile = {
               uid: uid,
-              displayName: u.displayName || currentUser.displayName || currentUser.email.split('@')[0],
-              email: currentUser.email,
+              displayName: u.displayName || currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Игрок GTA VI'),
+              email: currentUser.email || '',
               photoURL: u.photoURL || currentUser.photoURL || GTA_AVATARS[0].url,
               isGuest: false,
               statusText: 'Пользователь Леониды'
@@ -1501,8 +1535,8 @@ export default function App() {
             localStorage.removeItem('gta6_is_vip');
             const profile: UserProfile = {
               uid: uid,
-              displayName: currentUser.displayName || currentUser.email.split('@')[0],
-              email: currentUser.email,
+              displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Игрок GTA VI'),
+              email: currentUser.email || '',
               photoURL: currentUser.photoURL || GTA_AVATARS[0].url,
               isGuest: false,
               statusText: 'Пользователь Леониды'
@@ -1580,7 +1614,7 @@ export default function App() {
     email: string,
     displayName: string,
     photoURL?: string,
-    provider: 'email_password' | 'guest' = 'email_password'
+    provider: 'google' | 'guest' = 'google'
   ) => {
     const cleanEmail = sanitizeEmail(email);
     const effectiveUid = sanitizeUid(uid);
@@ -1620,14 +1654,14 @@ export default function App() {
           localStorage.removeItem('gta6_is_vip');
         }
         if (Array.isArray(u.savedCheats)) {
-          userFavCheats = u.savedCheats;
-          setFavoriteCheats(u.savedCheats);
-          localStorage.setItem('gta6_fav_cheats_v3', JSON.stringify(u.savedCheats));
+          userFavCheats = Array.from(new Set([...favoriteCheats, ...u.savedCheats]));
+          setFavoriteCheats(userFavCheats);
+          localStorage.setItem('gta6_fav_cheats_v3', JSON.stringify(userFavCheats));
         }
         if (Array.isArray(u.savedNews)) {
-          userFavNews = u.savedNews;
-          setFavoriteNews(u.savedNews);
-          localStorage.setItem('gta6_fav_news_v3', JSON.stringify(u.savedNews));
+          userFavNews = Array.from(new Set([...favoriteNews, ...u.savedNews]));
+          setFavoriteNews(userFavNews);
+          localStorage.setItem('gta6_fav_news_v3', JSON.stringify(userFavNews));
         }
       }
     } catch {
@@ -1672,156 +1706,54 @@ export default function App() {
     showToast(`Вход выполнен! Добро пожаловать, ${effectiveName}!`);
   };
 
-  // 100% In-App Email & Password Authentication (Zero external redirects to firebaseapp.com)
-  const handleEmailPasswordSignIn = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  // Google Authentication via Firebase Auth
+  const handleGoogleSignIn = async () => {
     setAuthError(null);
-    setAuthSuccessMsg(null);
-
-    const emailCheck = validateEmail(authEmail);
-    if (!emailCheck.isValid) {
-      setAuthError(emailCheck.error || 'Некорректный адрес электронной почты');
-      return;
-    }
-
-    if (!authPassword || authPassword.length < 6) {
-      setAuthError('Пароль должен содержать минимум 6 символов');
-      return;
-    }
-
     setAuthLoading(true);
     try {
-      const cred = await signInWithEmailAndPassword(auth, emailCheck.cleanEmail, authPassword);
-      if (cred.user) {
-        const uid = cred.user.uid;
-        const email = cred.user.email || emailCheck.cleanEmail;
-        const name = cred.user.displayName || email.split('@')[0] || 'Игрок';
-        const photo = cred.user.photoURL || GTA_AVATARS[0].url;
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
 
-        await completeSuccessfulLogin(uid, email, name, photo, 'email_password');
-        setIsAuthModalOpen(false);
-        setAuthPassword('');
-        setAuthConfirmPassword('');
+      const cred = await signInWithPopup(auth, provider);
+      if (cred.user) {
+        const u = cred.user;
+        const uid = u.uid;
+        const email = u.email || '';
+        const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
+        const photo = u.photoURL || GTA_AVATARS[0].url;
+
+        await completeSuccessfulLogin(uid, email, name, photo, 'google');
       }
     } catch (err: any) {
-      console.error('Sign-in error:', err);
-      let msg = 'Ошибка входа в аккаунт.';
-      if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-        msg = 'Неверный Email или пароль. Проверьте данные или создайте новый аккаунт.';
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'Некорректный формат адреса электронной почты.';
-      } else if (err.code === 'auth/too-many-requests') {
-        msg = 'Слишком много неудачных попыток входа. Пожалуйста, подождите немного или сбросьте пароль.';
+      console.error('Google Sign-In error:', err);
+      let msg = 'Не удалось выполнить вход через Google.';
+      if (err.code === 'auth/popup-blocked') {
+        try {
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: 'select_account' });
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch {
+          msg = 'Всплывающее окно заблокировано браузером. Разрешите всплывающие окна в настройках.';
+        }
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        msg = 'Авторизация отменена.';
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        return;
       } else if (err.code === 'auth/network-request-failed') {
         msg = 'Сбой сети: проверьте подключение к интернету.';
       } else if (err.message) {
         msg = err.message;
       }
       setAuthError(msg);
+      showToast(msg);
     } finally {
       setAuthLoading(false);
     }
   };
 
-  // 100% In-App Registration with Email & Password
-  const handleEmailPasswordSignUp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleOpenAuthModal = () => {
     setAuthError(null);
-    setAuthSuccessMsg(null);
-
-    const cleanName = sanitizeDisplayName(authDisplayName, 'Игрок');
-    if (!cleanName || cleanName.length < 2) {
-      setAuthError('Имя в игре должно содержать минимум 2 символа');
-      return;
-    }
-
-    const emailCheck = validateEmail(authEmail);
-    if (!emailCheck.isValid) {
-      setAuthError(emailCheck.error || 'Некорректный адрес электронной почты');
-      return;
-    }
-
-    if (!authPassword || authPassword.length < 6) {
-      setAuthError('Пароль должен быть не короче 6 символов');
-      return;
-    }
-
-    if (authPassword !== authConfirmPassword) {
-      setAuthError('Пароли не совпадают! Проверьте правильность ввода');
-      return;
-    }
-
-    setAuthLoading(true);
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, emailCheck.cleanEmail, authPassword);
-      if (cred.user) {
-        const photo = GTA_AVATARS[0].url;
-        await updateProfile(cred.user, {
-          displayName: cleanName,
-          photoURL: photo
-        }).catch(() => {});
-
-        await completeSuccessfulLogin(cred.user.uid, emailCheck.cleanEmail, cleanName, photo, 'email_password');
-        setIsAuthModalOpen(false);
-        setAuthPassword('');
-        setAuthConfirmPassword('');
-      }
-    } catch (err: any) {
-      console.error('Sign-up error:', err);
-      let msg = 'Ошибка регистрации.';
-      if (err.code === 'auth/email-already-in-use') {
-        msg = 'Пользователь с таким Email уже зарегистрирован. Перейдите во вкладку «Вход».';
-      } else if (err.code === 'auth/weak-password') {
-        msg = 'Слишком простой пароль. Используйте минимум 6 символов.';
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'Некорректный адрес электронной почты.';
-      } else if (err.code === 'auth/network-request-failed') {
-        msg = 'Сбой сети: проверьте подключение к интернету.';
-      } else if (err.message) {
-        msg = err.message;
-      }
-      setAuthError(msg);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // In-App Password Reset
-  const handlePasswordReset = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setAuthError(null);
-    setAuthSuccessMsg(null);
-
-    const emailCheck = validateEmail(authEmail);
-    if (!emailCheck.isValid) {
-      setAuthError(emailCheck.error || 'Введите корректный Email для восстановления');
-      return;
-    }
-
-    setAuthLoading(true);
-    try {
-      await sendPasswordResetEmail(auth, emailCheck.cleanEmail);
-      setAuthSuccessMsg(`Инструкция по восстановлению отправлена на ${emailCheck.cleanEmail}. Проверьте почту.`);
-    } catch (err: any) {
-      console.error('Password reset error:', err);
-      let msg = 'Не удалось отправить ссылку для сброса.';
-      if (err.code === 'auth/user-not-found') {
-        msg = 'Пользователь с таким адресом почты не найден.';
-      } else if (err.code === 'auth/invalid-email') {
-        msg = 'Некорректный адрес электронной почты.';
-      } else if (err.code === 'auth/network-request-failed') {
-        msg = 'Сбой сети: проверьте подключение к интернету.';
-      }
-      setAuthError(msg);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleOpenAuthModal = (tab: 'login' | 'register' | 'forgot' = 'login') => {
-    setAuthError(null);
-    setAuthSuccessMsg(null);
-    setAuthModalTab(tab);
     setIsAuthModalOpen(true);
   };
 
@@ -2157,7 +2089,7 @@ export default function App() {
                   </span>
                 </div>
                 <span className="text-[11px] text-neutral-400 font-medium">
-                  Этап 2 из 5
+                  Этап 3 из 5
                 </span>
               </div>
 
@@ -2175,8 +2107,8 @@ export default function App() {
                   },
                   {
                     title: 'Трейлер 2 и Детальный геймплей',
-                    date: 'Скоро',
-                    status: 'upcoming'
+                    date: 'Сентябрь 2026',
+                    status: 'completed'
                   },
                   {
                     title: 'Старт предзаказов',
@@ -2771,7 +2703,7 @@ export default function App() {
                           className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] disabled:opacity-30 disabled:cursor-not-allowed text-xs font-semibold text-white transition-all flex items-center space-x-1"
                         >
                           <ChevronLeft className="w-3.5 h-3.5" />
-                          <span>1-й лист (Свежие)</span>
+                          <span>Назад</span>
                         </button>
 
                         <div className="flex items-center space-x-1">
@@ -2797,7 +2729,7 @@ export default function App() {
                           disabled={currentPageSafe === totalNewsPages}
                           className="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] disabled:opacity-30 disabled:cursor-not-allowed text-xs font-semibold text-white transition-all flex items-center space-x-1"
                         >
-                          <span>2-й лист (Архив)</span>
+                          <span>Вперед</span>
                           <ChevronRight className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -2851,21 +2783,28 @@ export default function App() {
 
               {/* Profile Actions */}
               {userProfile.isGuest ? (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
                   <button
-                    onClick={() => handleOpenAuthModal('login')}
-                    className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-neutral-100 text-neutral-900 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 transition-all shadow-md active:scale-[0.98] cursor-pointer"
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={authLoading}
+                    className="w-full py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-900 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
                   >
-                    <Mail className="w-3.5 h-3.5 text-neutral-900 shrink-0" />
-                    <span>Войти</span>
+                    {authLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-neutral-900 shrink-0" />
+                        <span>Вход через Google...</span>
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-4 h-4 text-neutral-900 shrink-0" />
+                        <span>Войти через Google</span>
+                      </>
+                    )}
                   </button>
-                  <button
-                    onClick={() => handleOpenAuthModal('register')}
-                    className="w-full py-2.5 px-3 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 transition-all shadow-md active:scale-[0.98] cursor-pointer"
-                  >
-                    <UserPlus className="w-3.5 h-3.5 text-neutral-950 shrink-0" />
-                    <span>Регистрация</span>
-                  </button>
+                  <p className="text-[10px] text-neutral-400 text-center">
+                    Вход в 1 клик через Google аккаунт для сохранения читов и VIP-доступа
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-2">
@@ -3483,14 +3422,16 @@ export default function App() {
 
               <div className="space-y-2.5 pt-1">
                 <button
+                  type="button"
                   onClick={() => {
                     setGuestVipWarningModal(false);
-                    handleOpenAuthModal('login');
+                    handleGoogleSignIn();
                   }}
-                  className="w-full py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] cursor-pointer"
+                  disabled={authLoading}
+                  className="w-full py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
                 >
-                  <Mail className="w-4 h-4 text-neutral-950 shrink-0" />
-                  <span>Войти или зарегистрироваться</span>
+                  <LogIn className="w-4 h-4 text-neutral-950 shrink-0" />
+                  <span>Войти через Google</span>
                 </button>
 
                 <button
@@ -3695,7 +3636,7 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* MODAL: IN-APP EMAIL & PASSWORD AUTHENTICATION (NO REDIRECTS) */}
+        {/* MODAL: GOOGLE AUTHENTICATION */}
         {/* ================================================================== */}
         {isAuthModalOpen && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-150">
@@ -3708,9 +3649,7 @@ export default function App() {
                   </div>
                   <div>
                     <h3 className="font-display font-bold text-white text-base">
-                      {authModalTab === 'login' && 'Вход в аккаунт'}
-                      {authModalTab === 'register' && 'Регистрация игрока'}
-                      {authModalTab === 'forgot' && 'Сброс пароля'}
+                      Вход в аккаунт
                     </h3>
                     <p className="text-xs text-neutral-400">
                       GTA 6 Companion • Леонида
@@ -3727,48 +3666,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Tabs Switcher */}
-              <div className="grid grid-cols-2 p-1 rounded-xl bg-white/[0.04] border border-white/[0.08]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthError(null);
-                    setAuthSuccessMsg(null);
-                    setAuthModalTab('login');
-                  }}
-                  className={`py-2 text-xs font-display font-bold uppercase tracking-wider rounded-lg transition-all ${
-                    authModalTab === 'login' || authModalTab === 'forgot'
-                      ? 'bg-white text-neutral-950 shadow-sm'
-                      : 'text-neutral-400 hover:text-white'
-                  }`}
-                >
-                  Вход
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthError(null);
-                    setAuthSuccessMsg(null);
-                    setAuthModalTab('register');
-                  }}
-                  className={`py-2 text-xs font-display font-bold uppercase tracking-wider rounded-lg transition-all ${
-                    authModalTab === 'register'
-                      ? 'bg-[#ccff00] text-neutral-950 shadow-sm'
-                      : 'text-neutral-400 hover:text-white'
-                  }`}
-                >
-                  Регистрация
-                </button>
-              </div>
-
-              {/* Success Message */}
-              {authSuccessMsg && (
-                <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-start space-x-2 text-xs text-emerald-300 animate-in fade-in duration-150">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
-                  <span className="leading-snug">{authSuccessMsg}</span>
-                </div>
-              )}
-
               {/* Error Message */}
               {authError && (
                 <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-start space-x-2 text-xs text-rose-300 animate-in fade-in duration-150">
@@ -3777,247 +3674,42 @@ export default function App() {
                 </div>
               )}
 
-              {/* TAB 1: LOGIN */}
-              {authModalTab === 'login' && (
-                <form onSubmit={handleEmailPasswordSignIn} className="space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <Mail className="w-3 h-3 text-neutral-400" />
-                      <span>Электронная почта</span>
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      autoComplete="email"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="player@example.com"
-                      className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                    />
-                  </div>
+              {/* Information */}
+              <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] space-y-2 text-xs text-neutral-300 leading-relaxed">
+                <p>
+                  Войдите через Google аккаунт в один клик. Это позволит синхронизировать сохраненные чит-коды, избранные новости и ваш VIP-статус на всех ваших устройствах.
+                </p>
+              </div>
 
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                        <Lock className="w-3 h-3 text-neutral-400" />
-                        <span>Пароль</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenAuthModal('forgot')}
-                        className="text-[10px] text-[#ccff00] hover:underline"
-                      >
-                        Забыли пароль?
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        required
-                        autoComplete="current-password"
-                        value={authPassword}
-                        onChange={(e) => setAuthPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 pr-10 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white"
-                      >
-                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
+              {/* Google Sign-In Button */}
+              <div className="space-y-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={authLoading}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-neutral-100 text-neutral-950 font-display font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2.5 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                >
+                  {authLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
+                      <span>Вход через Google...</span>
+                    </>
+                  ) : (
+                    <>
+                      <LogIn className="w-4 h-4 text-neutral-950" />
+                      <span>Войти через Google</span>
+                    </>
+                  )}
+                </button>
 
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full mt-2 py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                  >
-                    {authLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-                        <span>Вход в систему...</span>
-                      </>
-                    ) : (
-                      <>
-                        <LogIn className="w-4 h-4 text-neutral-950" />
-                        <span>Войти в аккаунт</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAuthModal('register')}
-                      className="text-xs text-neutral-400 hover:text-white transition-colors"
-                    >
-                      Нет аккаунта? <span className="text-[#ccff00] font-semibold">Зарегистрироваться</span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* TAB 2: REGISTER */}
-              {authModalTab === 'register' && (
-                <form onSubmit={handleEmailPasswordSignUp} className="space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <User className="w-3 h-3 text-neutral-400" />
-                      <span>Имя в игре / Никнейм</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      autoComplete="username"
-                      value={authDisplayName}
-                      onChange={(e) => setAuthDisplayName(e.target.value)}
-                      placeholder="Например: ViceCity_Pro"
-                      className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <Mail className="w-3 h-3 text-neutral-400" />
-                      <span>Электронная почта</span>
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      autoComplete="email"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="player@example.com"
-                      className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <Lock className="w-3 h-3 text-neutral-400" />
-                      <span>Пароль (минимум 6 символов)</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        required
-                        autoComplete="new-password"
-                        value={authPassword}
-                        onChange={(e) => setAuthPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 pr-10 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white"
-                      >
-                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <Lock className="w-3 h-3 text-neutral-400" />
-                      <span>Повторите пароль</span>
-                    </label>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      autoComplete="new-password"
-                      value={authConfirmPassword}
-                      onChange={(e) => setAuthConfirmPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full mt-2 py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                  >
-                    {authLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-                        <span>Регистрация...</span>
-                      </>
-                    ) : (
-                      <>
-                        <UserPlus className="w-4 h-4 text-neutral-950" />
-                        <span>Создать аккаунт</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAuthModal('login')}
-                      className="text-xs text-neutral-400 hover:text-white transition-colors"
-                    >
-                      Уже есть аккаунт? <span className="text-[#ccff00] font-semibold">Войти</span>
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* TAB 3: FORGOT PASSWORD */}
-              {authModalTab === 'forgot' && (
-                <form onSubmit={handlePasswordReset} className="space-y-3">
-                  <p className="text-xs text-neutral-300 leading-relaxed">
-                    Введите адрес электронной почты, указанный при регистрации, и мы вышлем ссылку для сброса пароля.
-                  </p>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-neutral-400 flex items-center space-x-1">
-                      <Mail className="w-3 h-3 text-neutral-400" />
-                      <span>Электронная почта</span>
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      autoComplete="email"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="player@example.com"
-                      className="w-full bg-[#09090d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full mt-2 py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                  >
-                    {authLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-                        <span>Отправка ссылки...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Mail className="w-4 h-4 text-neutral-950" />
-                        <span>Отправить ссылку для сброса</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="text-center pt-1">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAuthModal('login')}
-                      className="text-xs text-[#ccff00] hover:underline"
-                    >
-                      ← Вернуться ко входу
-                    </button>
-                  </div>
-                </form>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setIsAuthModalOpen(false)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white text-xs font-semibold transition-colors cursor-pointer text-center"
+                >
+                  Продолжить как Гость
+                </button>
+              </div>
             </div>
           </div>
         )}
