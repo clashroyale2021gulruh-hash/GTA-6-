@@ -59,12 +59,13 @@ import {
 import {
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithCredential,
   updateProfile,
   signOut,
   onAuthStateChanged
 } from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
+import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
 import {
   sanitizeDisplayName,
   sanitizeEmail,
@@ -1461,24 +1462,17 @@ export default function App() {
   // AUTHENTICATION (EMAIL/PASSWORD & FIRESTORE CLOUD SYNC)
   // ==========================================================================
 
-  // Listen to Firebase Auth state on mount (Source of Truth)
+  // Initialize GoogleAuth plugin & Listen to Firebase Auth state on mount (Source of Truth)
   useEffect(() => {
-    // Check if user just redirected back from Google Sign-In
-    getRedirectResult(auth)
-      .then(async (result) => {
-        if (result?.user) {
-          const u = result.user;
-          const uid = u.uid;
-          const email = u.email || '';
-          const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
-          const photo = u.photoURL || GTA_AVATARS[0].url;
-          await completeSuccessfulLogin(uid, email, name, photo, 'google');
-          showToast(`Вход выполнен! Добро пожаловать, ${name}!`);
-        }
-      })
-      .catch((err) => {
-        console.warn('Google redirect result notice:', err);
+    try {
+      GoogleAuth.initialize({
+        clientId: '1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com',
+        scopes: ['profile', 'email'],
+        grantOfflineAccess: false
       });
+    } catch (err) {
+      console.warn('GoogleAuth initialize notice:', err);
+    }
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser && (currentUser.email || currentUser.uid)) {
@@ -1706,40 +1700,73 @@ export default function App() {
     showToast(`Вход выполнен! Добро пожаловать, ${effectiveName}!`);
   };
 
-  // Google Authentication via Firebase Auth
+  // Google Authentication via Native Capacitor GoogleAuth & Firebase Auth Credential
   const handleGoogleSignIn = async () => {
     setAuthError(null);
     setAuthLoading(true);
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
+      if (Capacitor.isNativePlatform()) {
+        // 1. Native Android Google Account Picker / Bottom Sheet (No Chrome, no redirects)
+        const googleUser = await GoogleAuth.signIn();
+        const idToken = googleUser?.authentication?.idToken;
 
-      const cred = await signInWithPopup(auth, provider);
-      if (cred.user) {
-        const u = cred.user;
-        const uid = u.uid;
-        const email = u.email || '';
-        const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
-        const photo = u.photoURL || GTA_AVATARS[0].url;
+        if (!idToken) {
+          throw new Error('Не удалось получить токен авторизации Google');
+        }
+
+        const email = googleUser?.email || '';
+        const name = googleUser?.name || (email ? email.split('@')[0] : 'Игрок GTA VI');
+        const photo = googleUser?.imageUrl || GTA_AVATARS[0].url;
+
+        // 2. Pass idToken into Firebase Auth via GoogleAuthProvider.credential
+        const credential = GoogleAuthProvider.credential(idToken);
+        const userCred = await signInWithCredential(auth, credential);
+        const uid = userCred.user.uid;
 
         await completeSuccessfulLogin(uid, email, name, photo, 'google');
+      } else {
+        // Web browser environment
+        try {
+          const googleUser = await GoogleAuth.signIn();
+          const idToken = googleUser?.authentication?.idToken;
+          if (idToken) {
+            const email = googleUser?.email || '';
+            const name = googleUser?.name || (email ? email.split('@')[0] : 'Игрок GTA VI');
+            const photo = googleUser?.imageUrl || GTA_AVATARS[0].url;
+
+            const credential = GoogleAuthProvider.credential(idToken);
+            const userCred = await signInWithCredential(auth, credential);
+            await completeSuccessfulLogin(userCred.user.uid, email, name, photo, 'google');
+            return;
+          }
+        } catch (nativeErr: any) {
+          console.warn('GoogleAuth web fallback to popup:', nativeErr);
+        }
+
+        const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        const cred = await signInWithPopup(auth, provider);
+        if (cred.user) {
+          const u = cred.user;
+          const uid = u.uid;
+          const email = u.email || '';
+          const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
+          const photo = u.photoURL || GTA_AVATARS[0].url;
+
+          await completeSuccessfulLogin(uid, email, name, photo, 'google');
+        }
       }
     } catch (err: any) {
       console.error('Google Sign-In error:', err);
       let msg = 'Не удалось выполнить вход через Google.';
-      if (err.code === 'auth/popup-blocked') {
-        try {
-          const provider = new GoogleAuthProvider();
-          provider.setCustomParameters({ prompt: 'select_account' });
-          await signInWithRedirect(auth, provider);
-          return;
-        } catch {
-          msg = 'Всплывающее окно заблокировано браузером. Разрешите всплывающие окна в настройках.';
-        }
-      } else if (err.code === 'auth/popup-closed-by-user') {
+      if (
+        err.code === 'auth/popup-closed-by-user' ||
+        err.type === 'userCancelled' ||
+        err.message?.includes('popup closed') ||
+        err.message?.includes('canceled') ||
+        err.message?.includes('cancelled')
+      ) {
         msg = 'Авторизация отменена.';
-      } else if (err.code === 'auth/cancelled-popup-request') {
-        return;
       } else if (err.code === 'auth/network-request-failed') {
         msg = 'Сбой сети: проверьте подключение к интернету.';
       } else if (err.message) {

@@ -4,4 +4,5 @@
     <string name="title_activity_main">GTA 6 Companion</string>
     <string name="package_name">com.gta6.companion</string>
     <string name="custom_url_scheme">com.gta6.companion</string>
+    <string name="server_client_id">1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com</string>
 </resources>
