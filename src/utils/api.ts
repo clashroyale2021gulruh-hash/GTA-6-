@@ -6,8 +6,8 @@
 
 import { Capacitor } from '@capacitor/core';
 
-// Cloud server URL for mobile APK when running in native Capacitor without local Node server
-export const FALLBACK_CLOUD_API = 'https://ais-dev-2ha56of3o32oeuhupyk6fl-213457543212.asia-east1.run.app';
+// Base API URL configuration for mobile APK and web
+export const FALLBACK_CLOUD_API = '';
 
 /**
  * Returns true if running as a native Android/iOS Capacitor application
@@ -22,17 +22,13 @@ export function isCapacitorNative(): boolean {
 
 /**
  * Resolves the base API URL:
- * - On Mobile (Capacitor/Android APK): Uses configured VITE_API_BASE_URL or remote Cloud backend
+ * - On Mobile (Capacitor/Android APK): Uses configured VITE_API_BASE_URL or window.origin
  * - On Web: Uses window.location.origin if available, or relative path
  */
 export function getApiBaseUrl(): string {
   const env = (import.meta as any).env;
   if (env && env.VITE_API_BASE_URL) {
     return String(env.VITE_API_BASE_URL).replace(/\/$/, '');
-  }
-
-  if (isCapacitorNative()) {
-    return FALLBACK_CLOUD_API;
   }
 
   if (typeof window !== 'undefined' && window.location && window.location.origin) {

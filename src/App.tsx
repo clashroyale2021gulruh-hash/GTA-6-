@@ -1765,19 +1765,38 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Google Sign-In error:', err);
-      let msg = 'Не удалось выполнить вход через Google.';
+      const rawMsg = (typeof err === 'string' ? err : err?.message || err?.code || JSON.stringify(err) || '').toLowerCase();
+      const errCode = err?.code || '';
+
+      let msg = 'Ошибка авторизации Google. Проверьте подключение к сети или SHA-1 ключ.';
       if (
-        err.code === 'auth/popup-closed-by-user' ||
+        errCode === 'auth/popup-closed-by-user' ||
         err.type === 'userCancelled' ||
-        err.message?.includes('popup closed') ||
-        err.message?.includes('canceled') ||
-        err.message?.includes('cancelled')
+        rawMsg.includes('popup closed') ||
+        rawMsg.includes('canceled') ||
+        rawMsg.includes('cancelled') ||
+        rawMsg.includes('12501')
       ) {
-        msg = 'Авторизация отменена.';
-      } else if (err.code === 'auth/network-request-failed') {
-        msg = 'Сбой сети: проверьте подключение к интернету.';
-      } else if (err.message) {
-        msg = err.message;
+        msg = 'Авторизация отменена пользователем.';
+      } else if (
+        errCode === 'auth/network-request-failed' ||
+        rawMsg.includes('network') ||
+        rawMsg.includes('offline') ||
+        rawMsg.includes('failed to fetch') ||
+        rawMsg.includes('code: 7')
+      ) {
+        msg = 'Ошибка авторизации Google. Проверьте подключение к сети.';
+      } else if (
+        rawMsg.includes('10') ||
+        rawMsg.includes('developer_error') ||
+        rawMsg.includes('sha-1') ||
+        rawMsg.includes('sha1') ||
+        rawMsg.includes('fingerprint') ||
+        rawMsg.includes('unregistered')
+      ) {
+        msg = 'Ошибка авторизации Google (код 10): проверьте добавление SHA-1 ключа в настройках Firebase.';
+      } else if (err.message && typeof err.message === 'string' && !err.message.includes('[object') && err.message.length < 100) {
+        msg = `Ошибка авторизации Google: ${err.message}. Проверьте подключение к сети или SHA-1 ключ.`;
       }
       setAuthError(msg);
       showToast(msg);
@@ -2008,10 +2027,10 @@ export default function App() {
             {effectiveIsVip && (
               <button
                 onClick={() => setActiveTab('profile')}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500/20 to-yellow-500/20 border border-amber-400/40 text-amber-300 text-[10px] font-bold shadow-sm"
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-[#ccff00]/15 border border-[#ccff00]/40 text-[#ccff00] text-[10px] font-bold shadow-[0_0_12px_rgba(204,255,0,0.15)]"
                 title="Leonida VIP Pass Активен"
               >
-                <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                <Crown className="w-3.5 h-3.5 text-[#ccff00] fill-[#ccff00]" />
                 <span>VIP PASS</span>
               </button>
             )}
@@ -2039,8 +2058,8 @@ export default function App() {
 
         {/* OFFLINE BANNER */}
         {!isOnline && (
-          <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 flex items-center justify-center space-x-2 text-xs text-amber-300 animate-in fade-in duration-200">
-            <WifiOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <div className="bg-[#ccff00]/10 border-b border-[#ccff00]/25 px-4 py-2 flex items-center justify-center space-x-2 text-xs text-[#ccff00] animate-in fade-in duration-200">
+            <WifiOff className="w-3.5 h-3.5 text-[#ccff00] shrink-0" />
             <span>Офлайн-режим: читы и локальные данные доступны без интернета</span>
           </div>
         )}
@@ -2245,9 +2264,9 @@ export default function App() {
                 onClick={() => setActiveTab('news')}
                 className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] hover:border-white/20 transition-all text-left cursor-pointer"
               >
-                <div className="flex items-center justify-between text-xs font-bold text-cyan-400 mb-0.5">
+                <div className="flex items-center justify-between text-xs font-bold text-[#ccff00] mb-0.5">
                   <div className="flex items-center space-x-1.5">
-                    <Play className="w-4 h-4 fill-cyan-400" />
+                    <Play className="w-4 h-4 fill-[#ccff00]" />
                     <span>Новости</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-neutral-400" />
@@ -2290,9 +2309,9 @@ export default function App() {
 
             {/* VIP CTA Strip if not VIP */}
             {!effectiveIsVip && (
-              <div className="p-3 rounded-2xl bg-[#14141c] border border-amber-500/30 flex items-center justify-between shadow-sm">
+              <div className="p-3.5 rounded-2xl bg-[#121217] border border-[#ccff00]/30 flex items-center justify-between shadow-sm relative overflow-hidden">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <div className="w-8 h-8 rounded-xl bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
                     <Crown className="w-4 h-4" />
                   </div>
                   <div>
@@ -2303,7 +2322,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => handleInitiateVipPurchase()}
-                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-extrabold text-xs shadow-md transition-all flex items-center space-x-1.5 cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-extrabold text-xs shadow-[0_0_14px_rgba(204,255,0,0.2)] transition-all flex items-center space-x-1.5 cursor-pointer"
                 >
                   <Crown className="w-3.5 h-3.5 fill-black" />
                   <span>Разблокировать</span>
@@ -2428,7 +2447,7 @@ export default function App() {
                         isCheatFree
                           ? 'border-emerald-500/30 hover:border-emerald-500/50'
                           : isUnlocked
-                          ? 'border-amber-500/30 hover:border-amber-500/50'
+                          ? 'border-[#ccff00]/30 hover:border-[#ccff00]/50'
                           : 'border-white/[0.08] hover:border-white/20'
                       }`}
                     >
@@ -2445,13 +2464,13 @@ export default function App() {
                                 Бесплатно
                               </span>
                             ) : isUnlocked ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-amber-300 bg-amber-500/20 border-amber-500/40 flex items-center space-x-1">
-                                <Crown className="w-3 h-3 text-amber-400 fill-amber-400" />
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-[#ccff00] bg-[#ccff00]/15 border-[#ccff00]/35 flex items-center space-x-1">
+                                <Crown className="w-3 h-3 text-[#ccff00] fill-[#ccff00]" />
                                 <span>VIP Доступ</span>
                               </span>
                             ) : (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-amber-300 bg-amber-500/10 border-amber-500/30 flex items-center space-x-1">
-                                <Lock className="w-3 h-3 text-amber-400" />
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-neutral-300 bg-white/[0.04] border-white/[0.08] flex items-center space-x-1">
+                                <Lock className="w-3 h-3 text-[#ccff00]" />
                                 <span>VIP в покупке</span>
                               </span>
                             )}
@@ -2497,7 +2516,7 @@ export default function App() {
                           )
                         ) : (
                           /* Locked VIP Cheat with blur & CTA */
-                          <div className="relative rounded-xl overflow-hidden border border-amber-500/20 bg-[#09090d] p-3">
+                          <div className="relative rounded-xl overflow-hidden border border-[#ccff00]/25 bg-[#09090d] p-3">
                             <div className="filter blur-sm select-none opacity-30 pointer-events-none flex flex-wrap gap-1.5">
                               <span className="px-2 py-1 rounded bg-neutral-800 text-xs font-mono">▶</span>
                               <span className="px-2 py-1 rounded bg-neutral-800 text-xs font-mono">X</span>
@@ -2508,7 +2527,7 @@ export default function App() {
                             </div>
                             <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-between px-3">
                               <div className="flex items-center space-x-2">
-                                <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                                <div className="w-7 h-7 rounded-lg bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
                                   <Lock className="w-3.5 h-3.5" />
                                 </div>
                                 <div>
@@ -2521,7 +2540,7 @@ export default function App() {
                                   e.stopPropagation();
                                   handleInitiateVipPurchase();
                                 }}
-                                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-extrabold text-xs shadow-md transition-all flex items-center space-x-1"
+                                className="px-3 py-1.5 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-extrabold text-xs shadow-md transition-all flex items-center space-x-1"
                               >
                                 <Crown className="w-3 h-3 fill-black" />
                                 <span>Открыть ($2.99)</span>
@@ -2557,7 +2576,7 @@ export default function App() {
                         ) : (
                           <button
                             onClick={() => handleInitiateVipPurchase()}
-                            className="text-xs font-bold py-1.5 px-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 flex items-center space-x-1.5 transition-all"
+                            className="text-xs font-bold py-1.5 px-3 rounded-xl border border-[#ccff00]/30 bg-[#ccff00]/10 text-[#ccff00] hover:bg-[#ccff00]/20 flex items-center space-x-1.5 transition-all"
                           >
                             <Lock className="w-3.5 h-3.5" />
                             <span>Разблокировать код</span>
@@ -2716,7 +2735,7 @@ export default function App() {
                           </p>
 
                           <div className="pt-2 flex items-center justify-between text-xs font-semibold">
-                            <span className="text-cyan-400">Смотреть и читать</span>
+                            <span className="text-[#ccff00]">Смотреть и читать</span>
                             <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform text-neutral-400" />
                           </div>
                         </div>
@@ -2808,7 +2827,7 @@ export default function App() {
                   <div className="flex items-center space-x-1.5 mt-2">
                     <span
                       className={`w-2 h-2 rounded-full ${
-                        userProfile.isGuest ? 'bg-amber-400' : 'bg-[#ccff00]'
+                        userProfile.isGuest ? 'bg-neutral-500' : 'bg-[#ccff00]'
                       }`}
                     />
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
@@ -2820,7 +2839,15 @@ export default function App() {
 
               {/* Profile Actions */}
               {userProfile.isGuest ? (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
+                  {/* Google Auth Error in Profile if any */}
+                  {authError && (
+                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-start space-x-2 text-xs text-rose-300 animate-in fade-in duration-150">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                      <span className="leading-snug">{authError}</span>
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     onClick={handleGoogleSignIn}
@@ -2864,20 +2891,20 @@ export default function App() {
             </div>
 
             {/* VIP PASS & MONETIZATION SECTION */}
-            <div className="rounded-3xl bg-gradient-to-br from-[#1c1811] via-[#14141a] to-[#121217] border border-amber-500/30 p-5 space-y-4 shadow-xl relative overflow-hidden">
+            <div className="rounded-3xl bg-gradient-to-br from-[#131612] via-[#121217] to-[#0c0d11] border border-[#ccff00]/30 p-5 space-y-4 shadow-xl relative overflow-hidden">
               {/* Background ambient glow */}
-              <div className="absolute -top-12 -right-12 w-36 h-36 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+              <div className="absolute -top-12 -right-12 w-36 h-36 bg-[#ccff00]/10 rounded-full blur-2xl pointer-events-none" />
 
               <div className="flex items-start justify-between relative z-10">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-600 flex items-center justify-center text-black shadow-lg">
+                  <div className="w-10 h-10 rounded-2xl bg-[#ccff00] flex items-center justify-center text-black shadow-[0_0_16px_rgba(204,255,0,0.3)]">
                     <Crown className="w-5 h-5 fill-black" />
                   </div>
                   <div>
                     <h3 className="text-base font-display font-extrabold text-white flex items-center space-x-2">
                       <span>Leonida VIP Pass</span>
                       {isVip && (
-                        <span className="text-[10px] uppercase font-bold bg-amber-400 text-black px-2 py-0.5 rounded-full">
+                        <span className="text-[10px] uppercase font-extrabold bg-[#ccff00] text-black px-2 py-0.5 rounded-full shadow-sm">
                           Активен
                         </span>
                       )}
@@ -2894,11 +2921,11 @@ export default function App() {
               {/* Status or Purchase Options */}
               {effectiveIsVip ? (
                 <div className="space-y-3">
-                  <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-400/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#ccff00]/10 border border-[#ccff00]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start space-x-3">
-                      <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                      <ShieldCheck className="w-5 h-5 text-[#ccff00] shrink-0 mt-0.5" />
                       <div className="text-xs text-neutral-200 leading-relaxed">
-                        <span className="font-bold text-amber-300">Статус VIP:</span> Пожизненный Leonida Pass активен. Золотой бейдж, доступ ко всем закрытым материалам и читам.
+                        <span className="font-bold text-[#ccff00]">Статус VIP:</span> Пожизненный Leonida Pass активен. Неоновый VIP-бейдж, доступ ко всем закрытым материалам и читам.
                         {userProfile.vipInvoiceId && (
                           <div className="text-[11px] text-neutral-400 font-mono mt-1">
                             Crypto Pay Инвойс: #{userProfile.vipInvoiceId}
@@ -2933,13 +2960,13 @@ export default function App() {
                     <div>
                       <div className="text-xs font-bold text-white">Статус VIP Спонсора</div>
                       <div className="text-[11px] text-neutral-400 mt-0.5">
-                        Пожизненный золотой статус профиля и поддержка проекта
+                        Пожизненный VIP статус профиля и поддержка проекта
                       </div>
                     </div>
 
                     <button
                       onClick={handleInitiateVipPurchase}
-                      className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-display font-bold text-xs flex items-center justify-center space-x-2 shadow-lg transition-all shrink-0 cursor-pointer"
+                      className="py-2.5 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(204,255,0,0.25)] transition-all shrink-0 cursor-pointer"
                     >
                       <Sparkles className="w-4 h-4 fill-black" />
                       <span>Купить VIP за $2.99</span>
@@ -2947,9 +2974,9 @@ export default function App() {
                   </div>
 
                   {userProfile.isGuest && (
-                    <p className="text-[11px] text-neutral-500 text-center flex items-center justify-center space-x-1">
-                      <AlertCircle className="w-3 h-3 text-amber-400 shrink-0" />
-                      <span>Для привязки VIP рекомендуется войти через Google или Email</span>
+                    <p className="text-[11px] text-neutral-400 text-center flex items-center justify-center space-x-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-[#ccff00] shrink-0" />
+                      <span>Для привязки VIP рекомендуется войти через Google</span>
                     </p>
                   )}
                 </div>
@@ -3014,7 +3041,7 @@ export default function App() {
                 {savedNewsItems.length > 0 && (
                   <button
                     onClick={() => setActiveTab('news')}
-                    className="text-xs text-cyan-400 hover:underline"
+                    className="text-xs text-[#ccff00] hover:underline"
                   >
                     Все новости →
                   </button>
@@ -3245,7 +3272,7 @@ export default function App() {
                       href={activeModalNews.videoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                      className="text-[#ccff00] hover:underline flex items-center space-x-1"
                     >
                       <span>Открыть в YouTube</span>
                       <ExternalLink className="w-3.5 h-3.5" />
@@ -3440,9 +3467,9 @@ export default function App() {
         {/* ================================================================== */}
         {guestVipWarningModal && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
-            <div className="w-full max-w-sm bg-[#121217] border border-amber-500/40 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom duration-300">
+            <div className="w-full max-w-sm bg-[#121217] border border-[#ccff00]/30 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom duration-300">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0">
+                <div className="w-10 h-10 rounded-2xl bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00] shrink-0">
                   <ShieldAlert className="w-5 h-5" />
                 </div>
                 <div>
@@ -3540,7 +3567,7 @@ export default function App() {
                   </div>
                   <div className="flex justify-between items-center text-neutral-400">
                     <span>Статус счета:</span>
-                    <span className="text-amber-400 font-medium flex items-center space-x-1">
+                    <span className="text-[#ccff00] font-medium flex items-center space-x-1">
                       <Clock className="w-3 h-3" />
                       <span>Ожидание оплаты</span>
                     </span>
@@ -3554,7 +3581,7 @@ export default function App() {
                   invoiceFeedback.status === 'paid'
                     ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                     : invoiceFeedback.status === 'unpaid'
-                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    ? 'bg-[#ccff00]/10 border-[#ccff00]/30 text-[#ccff00]'
                     : invoiceFeedback.status === 'checking'
                     ? 'bg-[#2AABEE]/10 border-[#2AABEE]/30 text-[#2AABEE]'
                     : invoiceFeedback.status === 'error'
@@ -3568,7 +3595,7 @@ export default function App() {
                   ) : invoiceFeedback.status === 'paid' ? (
                     <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
                   ) : invoiceFeedback.status === 'unpaid' ? (
-                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    <AlertCircle className="w-4 h-4 shrink-0 text-[#ccff00] mt-0.5" />
                   ) : invoiceFeedback.status === 'error' ? (
                     <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
                   ) : (
@@ -3642,7 +3669,7 @@ export default function App() {
                   type="button"
                   onClick={handleVerifyAndActivateInvoice}
                   disabled={isCheckingInvoice}
-                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                  className="w-full py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(204,255,0,0.25)] transition-all cursor-pointer disabled:opacity-50"
                 >
                   <RefreshCw className={`w-4 h-4 ${isCheckingInvoice ? 'animate-spin' : ''}`} />
                   <span>
