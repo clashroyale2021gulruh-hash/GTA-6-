@@ -1462,14 +1462,21 @@ export default function App() {
   // AUTHENTICATION (EMAIL/PASSWORD & FIRESTORE CLOUD SYNC)
   // ==========================================================================
 
-  // Initialize GoogleAuth plugin & Listen to Firebase Auth state on mount (Source of Truth)
+  // Initialize GoogleAuth plugin (native Android) & Listen to Firebase Auth state on mount (Source of Truth)
   useEffect(() => {
     try {
-      GoogleAuth.initialize({
-        clientId: '1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com',
-        scopes: ['profile', 'email'],
-        grantOfflineAccess: false
-      });
+      if (Capacitor.isNativePlatform()) {
+        const initPromise = GoogleAuth.initialize({
+          clientId: '1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com',
+          scopes: ['profile', 'email'],
+          grantOfflineAccess: false
+        });
+        if (initPromise && typeof initPromise.catch === 'function') {
+          initPromise.catch((err: any) => {
+            console.warn('GoogleAuth native init notice:', err);
+          });
+        }
+      }
     } catch (err) {
       console.warn('GoogleAuth initialize notice:', err);
     }
@@ -2018,6 +2025,7 @@ export default function App() {
                 <img
                   src={userProfile.photoURL}
                   alt="Avatar"
+                  referrerPolicy="no-referrer"
                   className="w-8 h-8 rounded-full object-cover border border-white/20"
                 />
               ) : (
@@ -2653,6 +2661,7 @@ export default function App() {
                           <img
                             src={news.image}
                             alt={news.title}
+                            referrerPolicy="no-referrer"
                             onError={(e) => {
                               const target = e.currentTarget;
                               if (news.youtubeId && !target.src.includes('hqdefault.jpg')) {
@@ -2780,6 +2789,7 @@ export default function App() {
                   <img
                     src={userProfile.photoURL}
                     alt={userProfile.displayName}
+                    referrerPolicy="no-referrer"
                     className="w-14 h-14 rounded-full object-cover border-2 border-[#ccff00]"
                   />
                 ) : (
@@ -2830,7 +2840,7 @@ export default function App() {
                     )}
                   </button>
                   <p className="text-[10px] text-neutral-400 text-center">
-                    Вход в 1 клик через Google аккаунт для сохранения читов и VIP-доступа
+                    Вход в сервис GTA 6 COMPANION • Сохранение читов и VIP-доступа
                   </p>
                 </div>
               ) : (
@@ -3173,6 +3183,7 @@ export default function App() {
                         <img
                           src={activeModalNews.image}
                           alt={activeModalNews.title}
+                          referrerPolicy="no-referrer"
                           onError={(e) => {
                             const target = e.currentTarget;
                             if (activeModalNews.youtubeId && !target.src.includes('hqdefault.jpg')) {
@@ -3373,6 +3384,7 @@ export default function App() {
                             <img
                               src={avatar.url}
                               alt={avatar.name}
+                              referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
                             />
                             {isSelected && (
@@ -3675,11 +3687,11 @@ export default function App() {
                     GTA
                   </div>
                   <div>
-                    <h3 className="font-display font-bold text-white text-base">
-                      Вход в аккаунт
+                    <h3 className="font-display font-bold text-white text-base tracking-wide">
+                      Вход в сервис GTA 6 COMPANION
                     </h3>
                     <p className="text-xs text-neutral-400">
-                      GTA 6 Companion • Леонида
+                      Синхронизация профиля, читов и VIP-доступа
                     </p>
                   </div>
                 </div>
