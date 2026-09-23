@@ -31,10 +31,15 @@ jobs:
         run: |
           npx cap sync android
 
-      - name: Build APK with Gradle
+      - name: Show Signing Report (SHA-1)
         run: |
           cd android
           chmod +x gradlew
+          ./gradlew signingReport
+
+      - name: Build APK with Gradle
+        run: |
+          cd android
           ./gradlew assembleDebug
 
       - name: Upload APK artifact
