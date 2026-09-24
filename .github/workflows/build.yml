@@ -31,6 +31,18 @@ jobs:
         run: |
           npx cap sync android
 
+      - name: Setup Signing Keystore
+        run: |
+          if [ -f android/app/debug.keystore.base64 ] && [ ! -f android/app/debug.keystore ]; then
+            echo "Restoring debug.keystore from base64..."
+            base64 -d android/app/debug.keystore.base64 > android/app/debug.keystore
+          fi
+          if [ ! -f android/app/debug.keystore ]; then
+            echo "Generating debug.keystore with keytool..."
+            keytool -genkeypair -v -keystore android/app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          mkdir -p ~/.android && cp android/app/debug.keystore ~/.android/debug.keystore
+
       - name: Show Signing Report (SHA-1)
         run: |
           cd android
