@@ -78,6 +78,10 @@ import {
   verifyProfileSignature,
   sha256
 } from './utils/cryptoSecurity';
+import {
+  validateRegistrationPassword,
+  generateSecurePassword
+} from './utils/passwordSecurity';
 import { Capacitor } from '@capacitor/core';
 import {
   sanitizeDisplayName,
@@ -1650,14 +1654,26 @@ export default function App() {
       return;
     }
 
-    if (!password || password.length < 6) {
-      setAuthError('Пароль должен содержать минимум 6 символов');
-      return;
-    }
+    if (authMode === 'register') {
+      if (!name || name.length < 2) {
+        setAuthError('Пожалуйста, введите никнейм (минимум 2 символа)');
+        return;
+      }
 
-    if (authMode === 'register' && (!name || name.length < 2)) {
-      setAuthError('Пожалуйста, введите никнейм (минимум 2 символа)');
-      return;
+      // Strict anti-hacking validation: must contain letters, digits, symbols (.,*!), length >= 8, not trivial
+      const pwdValidation = validateRegistrationPassword(password);
+      if (!pwdValidation.isValid) {
+        setAuthError(
+          pwdValidation.errorMessages[0] ||
+          'Пароль слишком простой! Для защиты от взлома пароль должен содержать минимум 8 символов, включая буквы, цифры и знаки (например: .,*!@#).'
+        );
+        return;
+      }
+    } else {
+      if (!password || password.length < 6) {
+        setAuthError('Пароль должен содержать минимум 6 символов');
+        return;
+      }
     }
 
     setAuthLoading(true);
@@ -1937,6 +1953,9 @@ export default function App() {
 
   const savedCheatItems = cheatsList.filter((c) => favoriteCheats.includes(c.id));
   const savedNewsItems = newsList.filter((n) => favoriteNews.includes(n.id));
+
+  // Real-time password validation & anti-hacking analysis for registration
+  const registerPasswordValidation = validateRegistrationPassword(authPassword);
 
   // ==========================================================================
   // RENDER MAIN APPLICATION
@@ -3798,28 +3817,167 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-1.5">
-                    Пароль (минимум 6 символов)
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                      {authMode === 'register' ? 'Пароль (буквы, цифры, знаки)' : 'Пароль'}
+                    </label>
+
+                    {authMode === 'register' && (
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const secure = generateSecurePassword();
+                            setAuthPassword(secure);
+                            setShowPassword(true);
+                            setAuthError(null);
+                            showToast('Сгенерирован надежный взломостойкий пароль!');
+                          }}
+                          className="inline-flex items-center space-x-1 text-[11px] text-[#D4FF00] hover:underline cursor-pointer font-medium"
+                          title="Автоматически создать сложный пароль с буквами, цифрами и знаками"
+                        >
+                          <Sparkles className="w-3 h-3 text-[#D4FF00]" />
+                          <span>Сгенерировать</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="relative">
                     <Lock className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type={showPassword ? 'text' : 'password'}
                       required
-                      minLength={6}
+                      minLength={authMode === 'register' ? 8 : 6}
                       value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full bg-[#121411] border border-white/[0.1] rounded-xl pl-9.5 pr-10 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00] transition-colors"
+                      onChange={(e) => {
+                        setAuthPassword(e.target.value);
+                        if (authError) setAuthError(null);
+                      }}
+                      placeholder={authMode === 'register' ? 'Буквы, цифры и знаки (например: Vice2026!*)' : '••••••••'}
+                      className={`w-full bg-[#121411] border rounded-xl pl-9.5 pr-10 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none transition-colors ${
+                        authMode === 'register' && authPassword
+                          ? registerPasswordValidation.isCommonOrTrivial
+                            ? 'border-rose-500 focus:border-rose-400'
+                            : registerPasswordValidation.isValid
+                            ? 'border-lime-500/80 focus:border-[#D4FF00]'
+                            : 'border-amber-400/60 focus:border-amber-400'
+                          : 'border-white/[0.1] focus:border-[#D4FF00]'
+                      }`}
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                      title={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+
+                  {/* Real-time Password Security & Anti-Hacking Card */}
+                  {authMode === 'register' && (
+                    <div className="mt-2.5 p-3 rounded-xl bg-black/45 border border-white/[0.08] space-y-2.5 animate-in fade-in duration-150">
+                      {/* Strength Header */}
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-400 font-medium flex items-center space-x-1.5">
+                          <ShieldCheck className={`w-3.5 h-3.5 ${registerPasswordValidation.isValid ? 'text-[#D4FF00]' : 'text-neutral-400'}`} />
+                          <span>Надежность пароля:</span>
+                        </span>
+
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          !authPassword
+                            ? 'text-neutral-500 bg-white/[0.04]'
+                            : registerPasswordValidation.isCommonOrTrivial
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : registerPasswordValidation.isValid
+                            ? 'bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40'
+                            : registerPasswordValidation.score >= 2
+                            ? 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                            : 'bg-orange-500/20 text-orange-300 border border-orange-500/30'
+                        }`}>
+                          {!authPassword ? 'Минимум 8 симв.' : registerPasswordValidation.strengthLabel}
+                        </span>
+                      </div>
+
+                      {/* 4-segment visual indicator bar */}
+                      <div className="grid grid-cols-4 gap-1.5 h-1.5">
+                        <div
+                          className={`rounded-full transition-all duration-300 ${
+                            registerPasswordValidation.score >= 1
+                              ? registerPasswordValidation.isCommonOrTrivial
+                                ? 'bg-rose-500'
+                                : registerPasswordValidation.score === 1
+                                ? 'bg-orange-500'
+                                : registerPasswordValidation.score === 2
+                                ? 'bg-amber-400'
+                                : 'bg-lime-400'
+                              : 'bg-white/10'
+                          }`}
+                        />
+                        <div
+                          className={`rounded-full transition-all duration-300 ${
+                            registerPasswordValidation.score >= 2 && !registerPasswordValidation.isCommonOrTrivial
+                              ? registerPasswordValidation.score === 2
+                                ? 'bg-amber-400'
+                                : 'bg-lime-400'
+                              : 'bg-white/10'
+                          }`}
+                        />
+                        <div
+                          className={`rounded-full transition-all duration-300 ${
+                            registerPasswordValidation.score >= 3 && !registerPasswordValidation.isCommonOrTrivial
+                              ? 'bg-lime-400'
+                              : 'bg-white/10'
+                          }`}
+                        />
+                        <div
+                          className={`rounded-full transition-all duration-300 ${
+                            registerPasswordValidation.score >= 4 && !registerPasswordValidation.isCommonOrTrivial
+                              ? 'bg-[#D4FF00]'
+                              : 'bg-white/10'
+                          }`}
+                        />
+                      </div>
+
+                      {/* Explicit Warning for Trivial Passwords (e.g. 12345678) */}
+                      {registerPasswordValidation.isCommonOrTrivial && (
+                        <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 flex items-start space-x-2 text-[11px] text-rose-300 animate-in fade-in duration-150">
+                          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                          <div className="leading-snug">
+                            <b className="font-semibold block text-rose-200">Простые пароли запрещены!</b>
+                            <span>{registerPasswordValidation.trivialReason || 'Пароли вроде «12345678» хакеры взламывают мгновенно. Придумайте пароль с буквами, цифрами и знаками.'}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Requirements Checklist */}
+                      <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                        {registerPasswordValidation.rules.map((rule) => (
+                          <div
+                            key={rule.id}
+                            className={`flex items-center space-x-1.5 text-[10px] transition-colors ${
+                              rule.met ? 'text-lime-400' : 'text-neutral-400'
+                            }`}
+                          >
+                            {rule.met ? (
+                              <CheckCircle2 className="w-3 h-3 text-lime-400 shrink-0" />
+                            ) : (
+                              <span className="w-3 h-3 rounded-full border border-neutral-600 shrink-0 flex items-center justify-center">
+                                <span className="w-1 h-1 rounded-full bg-neutral-600" />
+                              </span>
+                            )}
+                            <span className="leading-tight">{rule.label}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="text-[10px] text-neutral-400 pt-1 border-t border-white/[0.04] flex items-center justify-between">
+                        <span>🛡️ Спецзнаки: <strong className="text-neutral-300 font-mono">. , * ! ? @ # $ %</strong></span>
+                        <span className="text-[9px] text-neutral-400 font-medium">Защита от подбора</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2 space-y-2">
