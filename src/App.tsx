@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Clock,
   Bookmark,
@@ -44,9 +45,24 @@ import {
   MapPin,
   Activity,
   Wifi,
-  WifiOff
+  WifiOff,
+  Star,
+  Database,
+  Key,
+  CheckCircle
 } from 'lucide-react';
-import { db, auth, testFirestoreConnection } from './firebase';
+import {
+  isSupabaseConfigured,
+  getSupabaseCredentials,
+  configureSupabase,
+  disconnectSupabase,
+  supabaseSignIn,
+  supabaseSignUp,
+  supabaseSignOut,
+  supabaseGetSession,
+  supabaseSyncUserData
+} from './supabase';
+import { db, testFirestoreConnection } from './firebase';
 import {
   collection,
   onSnapshot,
@@ -57,15 +73,12 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import {
-  GoogleAuthProvider,
-  signInWithPopup,
-  signInWithCredential,
-  updateProfile,
-  signOut,
-  onAuthStateChanged
-} from 'firebase/auth';
+  getOrCreateDeviceUid,
+  signProfile,
+  verifyProfileSignature,
+  sha256
+} from './utils/cryptoSecurity';
 import { Capacitor } from '@capacitor/core';
-import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
 import {
   sanitizeDisplayName,
   sanitizeEmail,
@@ -129,6 +142,8 @@ export interface UserProfile {
   vipVerifiedAt?: string;
   vipAmount?: string;
   vipAsset?: string;
+  signature?: string;
+  pinHash?: string;
 }
 
 export const GTA_AVATARS = [
@@ -500,15 +515,62 @@ const FALLBACK_NEWS: NewsItem[] = [
 ];
 
 const DEFAULT_GUEST_PROFILE: UserProfile = {
-  displayName: 'Гость Леониды',
+  displayName: 'Гость',
   email: '',
   photoURL: '',
   isGuest: true,
-  statusText: 'Анонимный режим'
+  statusText: 'Гость'
 };
 
 // Target release date: November 19, 2026
 const TARGET_RELEASE_TIMESTAMP = new Date('2026-11-19T00:00:00Z').getTime();
+
+interface AnimatedCountdownSlotProps {
+  value: number;
+  label: string;
+  isSeconds?: boolean;
+}
+
+const AnimatedCountdownSlot: React.FC<AnimatedCountdownSlotProps> = ({ value, label, isSeconds }) => {
+  const formatted = String(value).padStart(2, '0');
+  const digits = formatted.split('');
+
+  return (
+    <div className="flex flex-col items-center justify-center p-3 sm:p-4 rounded-2xl bg-[#09090d] border border-white/[0.06] shadow-sm relative overflow-hidden group">
+      {/* Subtle indicator dot for seconds tick */}
+      {isSeconds && (
+        <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#D4FF00] animate-pulse opacity-75" />
+      )}
+
+      {/* Digit slots */}
+      <div className="flex items-center justify-center font-mono text-2xl sm:text-3xl font-black text-white tracking-tight h-8 sm:h-9">
+        {digits.map((digit, idx) => (
+          <div
+            key={idx}
+            className="relative w-[1ch] h-full flex items-center justify-center overflow-hidden"
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              <motion.span
+                key={`${label}-${idx}-${digit}`}
+                initial={{ y: 22, opacity: 0, filter: 'blur(2px)' }}
+                animate={{ y: 0, opacity: 1, filter: 'blur(0px)' }}
+                exit={{ y: -22, opacity: 0, filter: 'blur(2px)' }}
+                transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+                className="absolute inset-0 flex items-center justify-center font-mono font-black select-none"
+              >
+                {digit}
+              </motion.span>
+            </AnimatePresence>
+          </div>
+        ))}
+      </div>
+
+      <span className="text-[10px] font-semibold text-neutral-400 uppercase mt-1 tracking-wider">
+        {label}
+      </span>
+    </div>
+  );
+};
 
 export default function App() {
   // Navigation Tabs: timer | cheats | news | profile (Timer is default screen!)
@@ -574,6 +636,51 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
+  // Device Vault Profile State
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authDisplayName, setAuthDisplayName] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Supabase Cloud State & Credentials
+  const [isSupabaseReady, setIsSupabaseReady] = useState<boolean>(() => isSupabaseConfigured());
+  const [supabaseCreds, setSupabaseCreds] = useState(() => getSupabaseCredentials());
+  const [isSupabaseConfigModalOpen, setIsSupabaseConfigModalOpen] = useState<boolean>(false);
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState<string>(() => getSupabaseCredentials().url || '');
+  const [supabaseAnonKeyInput, setSupabaseAnonKeyInput] = useState<string>(() => getSupabaseCredentials().anonKey || '');
+  const [supabaseConnecting, setSupabaseConnecting] = useState<boolean>(false);
+  const [supabaseConnectError, setSupabaseConnectError] = useState<string | null>(null);
+  const [authMethod, setAuthMethod] = useState<'supabase' | 'vault'>(() => (isSupabaseConfigured() ? 'supabase' : 'supabase'));
+
+  // Restore Supabase Session on Launch
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      setIsSupabaseReady(true);
+      supabaseGetSession()
+        .then((session) => {
+          if (session?.user) {
+            const u = session.user;
+            const meta = u.user_metadata || {};
+            const restoredProfile: UserProfile = {
+              uid: u.id,
+              displayName: sanitizeDisplayName(meta.display_name || u.email?.split('@')[0] || 'Игрок Supabase'),
+              email: sanitizeEmail(u.email || ''),
+              photoURL: sanitizePhotoUrl(meta.avatar_url || GTA_AVATARS[0].url),
+              isGuest: false,
+              statusText: meta.is_vip ? 'Пожизненный VIP (Supabase)' : 'Аккаунт Supabase Cloud',
+              isVip: Boolean(meta.is_vip)
+            };
+            setUserProfile(restoredProfile);
+            if (restoredProfile.isVip) {
+              setIsVip(true);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   // Online / Offline state for robust network resilience
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
@@ -600,22 +707,22 @@ export default function App() {
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Favorites
+  // Favorites: strictly start empty [] for new users
   const [favoriteCheats, setFavoriteCheats] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('gta6_fav_cheats_v3');
-      return saved ? JSON.parse(saved) : ['cheat_invincibility'];
+      const saved = localStorage.getItem('gta6_fav_cheats_v4');
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return ['cheat_invincibility'];
+      return [];
     }
   });
 
   const [favoriteNews, setFavoriteNews] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('gta6_fav_news_v3');
-      return saved ? JSON.parse(saved) : ['news_trailer_2_release'];
+      const saved = localStorage.getItem('gta6_fav_news_v4');
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return ['news_trailer_2_release'];
+      return [];
     }
   });
 
@@ -634,22 +741,8 @@ export default function App() {
   // ==========================================================================
   // MONETIZATION STATE: FREEMIUM, REWARDED ADS & VIP STATUS
   // ==========================================================================
-  const [isVip, setIsVip] = useState<boolean>(() => {
-    try {
-      const savedProfile = localStorage.getItem('gta6_user_profile_v3');
-      if (savedProfile) {
-        const parsed = JSON.parse(savedProfile);
-        if (parsed && !parsed.isGuest && parsed.uid) {
-          return localStorage.getItem('gta6_is_vip') === 'true';
-        }
-      }
-    } catch {
-      // ignore
-    }
-    // Guests and noname accounts NEVER have VIP
-    localStorage.removeItem('gta6_is_vip');
-    return false;
-  });
+  // In-memory VIP status - verified cryptographically (SHA-256 HMAC) and via official CryptoBot gateway, never trusted blindly from plain localStorage
+  const [isVip, setIsVip] = useState<boolean>(false);
 
   // Effective VIP: strictly false for guest/noname accounts
   const effectiveIsVip = !userProfile.isGuest && Boolean(isVip);
@@ -921,23 +1014,21 @@ export default function App() {
     invoiceDetails?: { invoiceId: number; amount: string; asset: string }
   ) => {
     try {
-      const userKey = auth.currentUser?.uid || userProfile.uid;
+      const userKey = userProfile.uid;
       if (!userKey || userProfile.isGuest) return;
-      await setDoc(
-        doc(db, 'users', userKey),
-        {
-          uid: userKey,
-          email: userProfile.email,
-          displayName: userProfile.displayName,
-          isVip: currentVip,
-          vipInvoiceId: invoiceDetails ? invoiceDetails.invoiceId : (currentVip ? (userProfile.vipInvoiceId || null) : null),
-          vipVerifiedAt: currentVip ? (userProfile.vipVerifiedAt || new Date().toISOString()) : null,
-          vipAmount: invoiceDetails ? invoiceDetails.amount : (currentVip ? (userProfile.vipAmount || '2.99') : null),
-          vipAsset: invoiceDetails ? invoiceDetails.asset : (currentVip ? (userProfile.vipAsset || 'USDT') : null),
-          updatedAt: new Date().toISOString()
-        },
-        { merge: true }
-      );
+      const sig = await signProfile({
+        uid: userKey,
+        isVip: currentVip,
+        vipInvoiceId: invoiceDetails ? invoiceDetails.invoiceId : (currentVip ? Number(userProfile.vipInvoiceId) || 0 : 0),
+        vipVerifiedAt: currentVip ? (userProfile.vipVerifiedAt || new Date().toISOString()) : undefined
+      });
+      const updated = {
+        ...userProfile,
+        isVip: currentVip,
+        signature: sig
+      };
+      setUserProfile(updated);
+      localStorage.setItem('gta6_user_profile_v4', JSON.stringify(updated));
     } catch {
       // Offline fallback
     }
@@ -947,11 +1038,11 @@ export default function App() {
     // 1. Strict Authentication Status Verification
     if (userProfile.isGuest) {
       setGuestVipWarningModal(true);
-      showToast('Для оформления VIP требуется войти через Google или Email!');
+      showToast('Для оформления VIP требуется войти в аккаунт!');
       return;
     }
 
-    const rawUid = auth.currentUser?.uid || userProfile.uid;
+    const rawUid = userProfile.uid;
     const safeUid = sanitizeUid(rawUid);
     const cleanEmail = sanitizeEmail(userProfile.email);
 
@@ -1163,18 +1254,26 @@ export default function App() {
       if (result.paid) {
         // ACTUAL REAL PAYMENT CONFIRMED IN CRYPTOBOT
         setIsVip(true);
-        localStorage.setItem('gta6_is_vip', 'true');
+        const userUid = userProfile.uid && userProfile.uid !== 'dev_guest' ? userProfile.uid : getOrCreateDeviceUid();
+        const signature = await signProfile({
+          uid: userUid,
+          isVip: true,
+          vipInvoiceId: activeInvoice.invoice_id,
+          vipVerifiedAt: new Date().toISOString()
+        });
         const updated: UserProfile = {
           ...userProfile,
-          statusText: 'Пожизненный VIP Аккаунт',
+          uid: userUid,
+          statusText: 'VIP Аккаунт',
           isVip: true,
           vipInvoiceId: activeInvoice.invoice_id,
           vipVerifiedAt: new Date().toISOString(),
           vipAmount: activeInvoice.amount,
-          vipAsset: activeInvoice.asset
+          vipAsset: activeInvoice.asset,
+          signature
         };
         setUserProfile(updated);
-        localStorage.setItem('gta6_user_profile_v3', JSON.stringify(updated));
+        localStorage.setItem('gta6_user_profile_v4', JSON.stringify(updated));
         await syncMonetizationToFirestore(true, {
           invoiceId: activeInvoice.invoice_id,
           amount: activeInvoice.amount,
@@ -1237,7 +1336,6 @@ export default function App() {
         if (isLegit) {
           if (!isVip) {
             setIsVip(true);
-            localStorage.setItem('gta6_is_vip', 'true');
           }
           if (showNotification) {
             showToast('Статус проверен: лицензия VIP подтверждена в CryptoBot!');
@@ -1257,22 +1355,11 @@ export default function App() {
             vipInvoiceId: undefined,
             vipVerifiedAt: undefined,
             vipAmount: undefined,
-            vipAsset: undefined
+            vipAsset: undefined,
+            signature: undefined
           };
           setUserProfile(resetProfile);
-          localStorage.setItem('gta6_user_profile_v3', JSON.stringify(resetProfile));
-          await setDoc(
-            doc(db, 'users', userUid),
-            {
-              isVip: false,
-              vipInvoiceId: null,
-              vipVerifiedAt: null,
-              vipAmount: null,
-              vipAsset: null,
-              updatedAt: new Date().toISOString()
-            },
-            { merge: true }
-          );
+          localStorage.setItem('gta6_user_profile_v4', JSON.stringify(resetProfile));
           if (showNotification) {
             showToast('Неподтвержденный VIP аннулирован.');
           }
@@ -1295,25 +1382,11 @@ export default function App() {
       vipInvoiceId: undefined,
       vipVerifiedAt: undefined,
       vipAmount: undefined,
-      vipAsset: undefined
+      vipAsset: undefined,
+      signature: undefined
     };
     setUserProfile(resetProfile);
-    localStorage.setItem('gta6_user_profile_v3', JSON.stringify(resetProfile));
-    const userUid = auth.currentUser?.uid || userProfile.uid;
-    if (userUid && !userProfile.isGuest) {
-      await setDoc(
-        doc(db, 'users', userUid),
-        {
-          isVip: false,
-          vipInvoiceId: null,
-          vipVerifiedAt: null,
-          vipAmount: null,
-          vipAsset: null,
-          updatedAt: new Date().toISOString()
-        },
-        { merge: true }
-      );
-    }
+    localStorage.setItem('gta6_user_profile_v4', JSON.stringify(resetProfile));
     showToast('Неподтвержденный VIP аннулирован. Доступ возвращен к базовому.');
   };
 
@@ -1401,432 +1474,270 @@ export default function App() {
   // ==========================================================================
 
   const toggleFavCheat = async (id: string) => {
-    const updated = favoriteCheats.includes(id)
+    const isCurrentlyFav = favoriteCheats.includes(id);
+    const updated = isCurrentlyFav
       ? favoriteCheats.filter((i) => i !== id)
       : [...favoriteCheats, id];
 
     setFavoriteCheats(updated);
-    localStorage.setItem('gta6_fav_cheats_v3', JSON.stringify(updated));
+    localStorage.setItem('gta6_fav_cheats_v4', JSON.stringify(updated));
+    showToast(isCurrentlyFav ? 'Чит удален из сохраненных' : 'Чит сохранен в избранное');
 
-    try {
-      const userKey = auth.currentUser?.uid || userProfile.uid;
-      if (userKey && !userProfile.isGuest) {
-        await setDoc(
-          doc(db, 'users', userKey),
-          {
-            uid: userKey,
-            savedCheats: updated,
-            savedNews: favoriteNews,
-            email: userProfile.email,
-            displayName: userProfile.displayName,
-            updatedAt: new Date().toISOString()
-          },
-          { merge: true }
-        );
-      }
-    } catch {
-      // Local state is already updated
+    if (isSupabaseConfigured() && userProfile.uid && !userProfile.isGuest) {
+      supabaseSyncUserData(userProfile.uid, { favCheats: updated });
     }
   };
 
   const toggleFavNews = async (id: string) => {
-    const updated = favoriteNews.includes(id)
+    const isCurrentlyFav = favoriteNews.includes(id);
+    const updated = isCurrentlyFav
       ? favoriteNews.filter((i) => i !== id)
       : [...favoriteNews, id];
 
     setFavoriteNews(updated);
-    localStorage.setItem('gta6_fav_news_v3', JSON.stringify(updated));
+    localStorage.setItem('gta6_fav_news_v4', JSON.stringify(updated));
+    showToast(isCurrentlyFav ? 'Новость удалена из закладок' : 'Новость сохранена в избранное');
 
-    try {
-      const userKey = auth.currentUser?.uid || userProfile.uid;
-      if (userKey && !userProfile.isGuest) {
-        await setDoc(
-          doc(db, 'users', userKey),
-          {
-            uid: userKey,
-            savedNews: updated,
-            savedCheats: favoriteCheats,
-            email: userProfile.email,
-            displayName: userProfile.displayName,
-            updatedAt: new Date().toISOString()
-          },
-          { merge: true }
-        );
-      }
-    } catch {
-      // Local state is already updated
+    if (isSupabaseConfigured() && userProfile.uid && !userProfile.isGuest) {
+      supabaseSyncUserData(userProfile.uid, { favNews: updated });
     }
   };
 
   // ==========================================================================
-  // AUTHENTICATION (EMAIL/PASSWORD & FIRESTORE CLOUD SYNC)
+  // ZERO-LEAK DEVICE VAULT & CRYPTOGRAPHIC INTEGRITY SYSTEM
   // ==========================================================================
 
-  // Initialize GoogleAuth plugin (native Android) & Listen to Firebase Auth state on mount (Source of Truth)
+  // Load secure local vault profile on mount
   useEffect(() => {
+    // Purge obsolete demo keys
     try {
-      if (Capacitor.isNativePlatform()) {
-        const initPromise = GoogleAuth.initialize({
-          clientId: '1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com',
-          scopes: ['profile', 'email'],
-          grantOfflineAccess: false
-        });
-        if (initPromise && typeof initPromise.catch === 'function') {
-          initPromise.catch((err: any) => {
-            console.warn('GoogleAuth native init notice:', err);
-          });
-        }
-      }
-    } catch (err) {
-      console.warn('GoogleAuth initialize notice:', err);
+      localStorage.removeItem('gta6_fav_cheats');
+      localStorage.removeItem('gta6_fav_cheats_v2');
+      localStorage.removeItem('gta6_fav_cheats_v3');
+      localStorage.removeItem('gta6_fav_news');
+      localStorage.removeItem('gta6_fav_news_v2');
+      localStorage.removeItem('gta6_fav_news_v3');
+      localStorage.removeItem('gta6_is_vip');
+    } catch {
+      // ignore
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser && (currentUser.email || currentUser.uid)) {
-        const uid = currentUser.uid;
-        const emailKey = currentUser.email ? currentUser.email.replace(/[^a-zA-Z0-9_]/g, '_') : uid;
-        try {
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 3000)
-          );
-          // Check by UID first, fallback to emailKey if previous session used it
-          let snap = await Promise.race([
-            getDoc(doc(db, 'users', uid)),
-            timeoutPromise
-          ]);
-          if (!snap.exists() && emailKey !== uid) {
-            snap = await Promise.race([
-              getDoc(doc(db, 'users', emailKey)),
-              timeoutPromise
-            ]);
-          }
-
-          if (snap.exists()) {
-            const u = snap.data();
-            const profile: UserProfile = {
-              uid: uid,
-              displayName: u.displayName || currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Игрок GTA VI'),
-              email: currentUser.email || '',
-              photoURL: u.photoURL || currentUser.photoURL || GTA_AVATARS[0].url,
-              isGuest: false,
-              statusText: 'Пользователь Леониды'
-            };
-            setUserProfile(profile);
-            localStorage.setItem('gta6_user_profile_v3', JSON.stringify(profile));
-
-            if (Array.isArray(u.savedCheats)) {
-              setFavoriteCheats(u.savedCheats);
-              localStorage.setItem('gta6_fav_cheats_v3', JSON.stringify(u.savedCheats));
-            }
-            if (Array.isArray(u.savedNews)) {
-              setFavoriteNews(u.savedNews);
-              localStorage.setItem('gta6_fav_news_v3', JSON.stringify(u.savedNews));
-            }
-            if (typeof u.isVip === 'boolean' && u.isVip === true) {
-              setIsVip(true);
-              localStorage.setItem('gta6_is_vip', 'true');
-              // Automatically audit against CryptoBot to ensure genuine payment
-              auditAndEnforceVipAuthenticity(uid, false);
-            } else {
-              setIsVip(false);
-              localStorage.removeItem('gta6_is_vip');
-            }
-          } else {
-            setIsVip(false);
-            localStorage.removeItem('gta6_is_vip');
-            const profile: UserProfile = {
-              uid: uid,
-              displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Игрок GTA VI'),
-              email: currentUser.email || '',
-              photoURL: currentUser.photoURL || GTA_AVATARS[0].url,
-              isGuest: false,
-              statusText: 'Пользователь Леониды'
-            };
-            setUserProfile(profile);
-            localStorage.setItem('gta6_user_profile_v3', JSON.stringify(profile));
-          }
-        } catch {
-          const cachedProfile = localStorage.getItem('gta6_user_profile_v3');
-          if (cachedProfile) {
-            try {
-              const parsed = JSON.parse(cachedProfile);
-              if (parsed && !parsed.isGuest) {
-                setUserProfile(parsed);
-              }
-            } catch {
-              // ignore
-            }
-          }
-        }
-      } else {
-        // Explicitly signed out or no active auth
-        const cachedProfile = localStorage.getItem('gta6_user_profile_v3');
-        if (cachedProfile) {
-          try {
-            const parsed = JSON.parse(cachedProfile);
-            if (parsed && !parsed.isGuest && parsed.uid) {
-              // Keep Google profile session intact
-              setUserProfile(parsed);
-              if (localStorage.getItem('gta6_is_vip') === 'true') {
+    try {
+      const saved = localStorage.getItem('gta6_user_profile_v4');
+      if (saved) {
+        const parsed: UserProfile = JSON.parse(saved);
+        if (parsed && parsed.uid && !parsed.isGuest) {
+          setUserProfile(parsed);
+          if (parsed.isVip) {
+            // Cryptographic anti-tamper verification
+            verifyProfileSignature(
+              {
+                uid: parsed.uid,
+                isVip: true,
+                vipInvoiceId: Number(parsed.vipInvoiceId) || 0,
+                vipVerifiedAt: parsed.vipVerifiedAt
+              },
+              parsed.signature
+            ).then((isValid) => {
+              if (isValid) {
                 setIsVip(true);
+              } else if (parsed.vipInvoiceId) {
+                // Cross-check with official CryptoBot API
+                auditAndEnforceVipAuthenticity(parsed.uid, false);
+              } else {
+                // Tampering detected: revoke forged status
+                setIsVip(false);
               }
-              // Verify latest status from Cloud Firestore and CryptoBot
-              getDoc(doc(db, 'users', parsed.uid))
-                .then((snap) => {
-                  if (snap.exists()) {
-                    const u = snap.data();
-                    if (u.isVip === true) {
-                      setIsVip(true);
-                      localStorage.setItem('gta6_is_vip', 'true');
-                      auditAndEnforceVipAuthenticity(parsed.uid, false);
-                    } else {
-                      setIsVip(false);
-                      localStorage.removeItem('gta6_is_vip');
-                    }
-                  }
-                })
-                .catch(() => {});
-              return;
-            }
-          } catch {
-            // ignore
+            });
           }
         }
-        setIsVip(false);
-        localStorage.removeItem('gta6_is_vip');
-        setUserProfile(DEFAULT_GUEST_PROFILE);
       }
-    });
-    return () => unsubscribe();
+    } catch {
+      setUserProfile(DEFAULT_GUEST_PROFILE);
+      setIsVip(false);
+    }
   }, []);
 
   // Initial VIP integrity audit check on session launch
   useEffect(() => {
-    const userUid = auth.currentUser?.uid || userProfile.uid;
-    const hasVipFlag = isVip || localStorage.getItem('gta6_is_vip') === 'true';
-    if (userUid && !userProfile.isGuest && hasVipFlag) {
+    const userUid = userProfile.uid;
+    if (userUid && !userProfile.isGuest && isVip) {
       auditAndEnforceVipAuthenticity(userUid, false);
     }
   }, [userProfile.uid, userProfile.isGuest]);
 
-  // Helper to complete successful login & Cloud Firestore synchronization
-  const completeSuccessfulLogin = async (
-    uid: string,
-    email: string,
-    displayName: string,
-    photoURL?: string,
-    provider: 'google' | 'guest' = 'google'
-  ) => {
-    const cleanEmail = sanitizeEmail(email);
-    const effectiveUid = sanitizeUid(uid);
-    const effectiveName = sanitizeDisplayName(displayName, cleanEmail ? cleanEmail.split('@')[0] : 'Игрок');
-    const effectivePhoto = photoURL || GTA_AVATARS[0].url;
+  // ==========================================================================
+  // SUPABASE CONFIGURATION & SYNC HANDLERS
+  // ==========================================================================
 
-    if (cleanEmail) {
-      localStorage.setItem('gta6_last_email', cleanEmail);
-    }
-    if (effectiveName) {
-      localStorage.setItem('gta6_last_name', effectiveName);
-    }
+  const handleSaveSupabaseConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSupabaseConnectError(null);
+    setSupabaseConnecting(true);
 
-    let userVip = false;
-    let userFavCheats = favoriteCheats;
-    let userFavNews = favoriteNews;
-
-    // Load existing profile & VIP status & saved cheats from Cloud Firestore
     try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 3000)
-      );
-      const snap: any = await Promise.race([
-        getDoc(doc(db, 'users', effectiveUid)),
-        timeoutPromise
-      ]);
+      const res = await configureSupabase(supabaseUrlInput, supabaseAnonKeyInput);
+      if (res.success) {
+        setIsSupabaseReady(true);
+        setSupabaseCreds(getSupabaseCredentials());
+        setAuthMethod('supabase');
+        showToast('Supabase Cloud успешно подключен!');
+        setIsSupabaseConfigModalOpen(false);
 
-      if (snap && snap.exists()) {
-        const u = snap.data();
-        if (typeof u.isVip === 'boolean' && u.isVip === true) {
-          userVip = true;
-          setIsVip(true);
-          localStorage.setItem('gta6_is_vip', 'true');
-          auditAndEnforceVipAuthenticity(effectiveUid, false);
-        } else {
-          setIsVip(false);
-          localStorage.removeItem('gta6_is_vip');
+        if (res.user) {
+          const u = res.user;
+          const meta = u.user_metadata || {};
+          const restored: UserProfile = {
+            uid: u.id,
+            displayName: sanitizeDisplayName(meta.display_name || u.email?.split('@')[0] || 'Игрок'),
+            email: sanitizeEmail(u.email || ''),
+            photoURL: sanitizePhotoUrl(meta.avatar_url || GTA_AVATARS[0].url),
+            isGuest: false,
+            statusText: 'Аккаунт Supabase Cloud',
+            isVip: Boolean(meta.is_vip)
+          };
+          setUserProfile(restored);
         }
-        if (Array.isArray(u.savedCheats)) {
-          userFavCheats = Array.from(new Set([...favoriteCheats, ...u.savedCheats]));
-          setFavoriteCheats(userFavCheats);
-          localStorage.setItem('gta6_fav_cheats_v3', JSON.stringify(userFavCheats));
-        }
-        if (Array.isArray(u.savedNews)) {
-          userFavNews = Array.from(new Set([...favoriteNews, ...u.savedNews]));
-          setFavoriteNews(userFavNews);
-          localStorage.setItem('gta6_fav_news_v3', JSON.stringify(userFavNews));
-        }
-      }
-    } catch {
-      // Use fallback defaults
-    }
-
-    // Save/merge User document into Cloud Firestore
-    try {
-      await setDoc(
-        doc(db, 'users', effectiveUid),
-        {
-          uid: effectiveUid,
-          displayName: effectiveName,
-          email: cleanEmail,
-          photoURL: effectivePhoto,
-          authProvider: provider,
-          isGuest: false,
-          isVip: userVip,
-          savedCheats: userFavCheats,
-          savedNews: userFavNews,
-          updatedAt: new Date().toISOString()
-        },
-        { merge: true }
-      );
-    } catch {
-      // Offline fallback
-    }
-
-    const authed: UserProfile = {
-      uid: effectiveUid,
-      displayName: effectiveName,
-      email: cleanEmail,
-      photoURL: effectivePhoto,
-      isGuest: false,
-      statusText: userVip ? 'Пожизненный VIP Аккаунт' : 'Личный аккаунт'
-    };
-
-    setUserProfile(authed);
-    localStorage.setItem('gta6_user_profile_v3', JSON.stringify(authed));
-    setIsAuthModalOpen(false);
-    setGuestVipWarningModal(false);
-    showToast(`Вход выполнен! Добро пожаловать, ${effectiveName}!`);
-  };
-
-  // Google Authentication via Native Capacitor GoogleAuth & Firebase Auth Credential
-  const handleGoogleSignIn = async () => {
-    setAuthError(null);
-    setAuthLoading(true);
-    try {
-      if (Capacitor.isNativePlatform()) {
-        // Ensure GoogleAuth plugin is initialized before presenting native account picker
-        try {
-          await GoogleAuth.initialize({
-            clientId: '1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com',
-            scopes: ['profile', 'email'],
-            grantOfflineAccess: false
-          });
-        } catch (initErr) {
-          console.warn('GoogleAuth pre-signin initialize notice:', initErr);
-        }
-
-        // 1. Native Android Google Account Picker / Bottom Sheet (No Chrome, no redirects)
-        const googleUser = await GoogleAuth.signIn();
-        const idToken = googleUser?.authentication?.idToken || (googleUser as any)?.idToken;
-
-        const email = googleUser?.email || '';
-        const name = googleUser?.name || (googleUser as any)?.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
-        const photo = googleUser?.imageUrl || GTA_AVATARS[0].url;
-
-        let uid = '';
-        if (idToken) {
-          try {
-            // 2. Pass idToken into Firebase Auth via GoogleAuthProvider.credential
-            const credential = GoogleAuthProvider.credential(idToken);
-            const userCred = await signInWithCredential(auth, credential);
-            uid = userCred.user.uid;
-          } catch (firebaseErr: any) {
-            console.warn('Firebase Auth credential exchange notice:', firebaseErr);
-            // Fallback: derive stable UID from Google ID or email so restricted networks do not block the user
-            uid = (googleUser as any)?.id || (email ? 'google_' + email.replace(/[^a-zA-Z0-9_]/g, '_') : 'google_user_' + Date.now());
-          }
-        } else {
-          uid = (googleUser as any)?.id || (email ? 'google_' + email.replace(/[^a-zA-Z0-9_]/g, '_') : 'google_user_' + Date.now());
-        }
-
-        await completeSuccessfulLogin(uid, email, name, photo, 'google');
       } else {
-        // Web browser environment
-        try {
-          const googleUser = await GoogleAuth.signIn();
-          const idToken = googleUser?.authentication?.idToken || (googleUser as any)?.idToken;
-          if (idToken) {
-            const email = googleUser?.email || '';
-            const name = googleUser?.name || (googleUser as any)?.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
-            const photo = googleUser?.imageUrl || GTA_AVATARS[0].url;
-
-            let uid = '';
-            try {
-              const credential = GoogleAuthProvider.credential(idToken);
-              const userCred = await signInWithCredential(auth, credential);
-              uid = userCred.user.uid;
-            } catch {
-              uid = (googleUser as any)?.id || (email ? 'google_' + email.replace(/[^a-zA-Z0-9_]/g, '_') : 'google_user_' + Date.now());
-            }
-            await completeSuccessfulLogin(uid, email, name, photo, 'google');
-            return;
-          }
-        } catch (nativeErr: any) {
-          console.warn('GoogleAuth web fallback to popup:', nativeErr);
-        }
-
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account' });
-        const cred = await signInWithPopup(auth, provider);
-        if (cred.user) {
-          const u = cred.user;
-          const uid = u.uid;
-          const email = u.email || '';
-          const name = u.displayName || (email ? email.split('@')[0] : 'Игрок GTA VI');
-          const photo = u.photoURL || GTA_AVATARS[0].url;
-
-          await completeSuccessfulLogin(uid, email, name, photo, 'google');
-        }
+        setSupabaseConnectError(res.message);
       }
     } catch (err: any) {
-      console.error('Google Sign-In error:', err);
-      const rawMsg = (typeof err === 'string' ? err : err?.message || err?.code || JSON.stringify(err) || '').toLowerCase();
-      const errCode = err?.code || '';
+      setSupabaseConnectError(err?.message || 'Не удалось подключиться к Supabase');
+    } finally {
+      setSupabaseConnecting(false);
+    }
+  };
 
-      // User closed or canceled account selection - do not show error banner
-      if (
-        errCode === 'auth/popup-closed-by-user' ||
-        err.type === 'userCancelled' ||
-        rawMsg.includes('popup closed') ||
-        rawMsg.includes('canceled') ||
-        rawMsg.includes('cancelled') ||
-        rawMsg.includes('12501')
-      ) {
-        return;
-      }
+  const handleDisconnectSupabase = async () => {
+    await disconnectSupabase();
+    setIsSupabaseReady(false);
+    setSupabaseCreds(getSupabaseCredentials());
+    setSupabaseUrlInput('');
+    setSupabaseAnonKeyInput('');
+    setAuthMethod('vault');
+    showToast('Сессия отключена.');
+  };
 
-      let msg = 'Ошибка авторизации Google. Проверьте подключение к сети.';
-      if (
-        errCode === 'auth/network-request-failed' ||
-        rawMsg.includes('network') ||
-        rawMsg.includes('offline') ||
-        rawMsg.includes('failed to fetch') ||
-        rawMsg.includes('code: 7')
-      ) {
-        msg = 'Ошибка сети. Проверьте интернет-соединение.';
-      } else if (
-        rawMsg.includes('10') ||
-        rawMsg.includes('developer_error') ||
-        rawMsg.includes('sha-1') ||
-        rawMsg.includes('sha1') ||
-        rawMsg.includes('fingerprint') ||
-        rawMsg.includes('unregistered')
-      ) {
-        msg = 'Ошибка Google Auth (код 10): убедитесь, что SHA-1 ключ добавлен в Firebase/Google Cloud Console.';
-      } else if (err.message && typeof err.message === 'string' && !err.message.includes('[object') && err.message.length < 120) {
-        msg = `Ошибка авторизации Google: ${err.message}`;
+  const handleManualSupabaseSync = async () => {
+    if (!isSupabaseConfigured() || !userProfile.uid || userProfile.isGuest) {
+      showToast('Для синхронизации войдите в аккаунт Supabase');
+      return;
+    }
+    showToast('Синхронизация данных с облаком Supabase...');
+    try {
+      await supabaseSyncUserData(userProfile.uid, {
+        favCheats: favoriteCheats,
+        favNews: favoriteNews,
+        isVip: isVip
+      });
+      showToast('Данные успешно синхронизированы с Supabase!');
+    } catch {
+      showToast('Ошибка синхронизации с Supabase');
+    }
+  };
+
+  // Simplified & Clean Authentication Handler
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+
+    const email = authEmail.trim();
+    const password = authPassword.trim();
+    const name = authDisplayName.trim();
+
+    if (!email || !email.includes('@')) {
+      setAuthError('Пожалуйста, введите корректный адрес электронной почты');
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      setAuthError('Пароль должен содержать минимум 6 символов');
+      return;
+    }
+
+    if (authMode === 'register' && (!name || name.length < 2)) {
+      setAuthError('Пожалуйста, введите никнейм (минимум 2 символа)');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      if (authMode === 'register') {
+        let userId = '';
+        const finalName = name || email.split('@')[0];
+
+        if (isSupabaseReady) {
+          try {
+            const res = await supabaseSignUp(email, password, finalName);
+            if (res.user?.id) userId = res.user.id;
+          } catch (supErr: any) {
+            console.warn('Supabase auth notice:', supErr);
+          }
+        }
+
+        const newProfile: UserProfile = {
+          uid: userId || getOrCreateDeviceUid(),
+          displayName: sanitizeDisplayName(finalName),
+          email: sanitizeEmail(email),
+          photoURL: GTA_AVATARS[0].url,
+          isGuest: false,
+          statusText: 'Игрок Leonida',
+          isVip: false
+        };
+
+        setUserProfile(newProfile);
+        localStorage.setItem('gta6_user_profile_v4', JSON.stringify(newProfile));
+        setIsAuthModalOpen(false);
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthDisplayName('');
+        showToast(`Добро пожаловать в игру, ${newProfile.displayName}!`);
+      } else {
+        let loggedInName = email.split('@')[0];
+        let userId = '';
+        let isUserVip = false;
+
+        if (isSupabaseReady) {
+          try {
+            const res = await supabaseSignIn(email, password);
+            if (res.user) {
+              userId = res.user.id;
+              const meta = res.user.user_metadata || {};
+              if (meta.display_name) loggedInName = meta.display_name;
+              if (meta.is_vip) isUserVip = Boolean(meta.is_vip);
+            }
+          } catch (supErr: any) {
+            if (supErr?.message?.includes('Invalid') || supErr?.message?.includes('credentials')) {
+              setAuthError('Неверный email или пароль');
+              setAuthLoading(false);
+              return;
+            }
+          }
+        }
+
+        const loggedInProfile: UserProfile = {
+          uid: userId || getOrCreateDeviceUid(),
+          displayName: sanitizeDisplayName(loggedInName),
+          email: sanitizeEmail(email),
+          photoURL: userProfile.photoURL || GTA_AVATARS[0].url,
+          isGuest: false,
+          statusText: isUserVip ? 'VIP Аккаунт' : 'Игрок Leonida',
+          isVip: isUserVip || isVip
+        };
+
+        setUserProfile(loggedInProfile);
+        if (loggedInProfile.isVip) {
+          setIsVip(true);
+        }
+        localStorage.setItem('gta6_user_profile_v4', JSON.stringify(loggedInProfile));
+        setIsAuthModalOpen(false);
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthDisplayName('');
+        showToast(`С возвращением, ${loggedInProfile.displayName}!`);
       }
-      setAuthError(msg);
-      showToast(msg);
+    } catch (err: any) {
+      setAuthError(err?.message || 'Ошибка входа в аккаунт');
     } finally {
       setAuthLoading(false);
     }
@@ -1858,31 +1769,21 @@ export default function App() {
       const updatedProfile: UserProfile = {
         ...userProfile,
         displayName: cleanName,
-        photoURL: selectedAvatar
+        photoURL: selectedAvatar,
+        isGuest: false
       };
 
+      if (isVip) {
+        updatedProfile.signature = await signProfile({
+          uid: updatedProfile.uid || 'dev_guest',
+          isVip: true,
+          vipInvoiceId: Number(updatedProfile.vipInvoiceId) || 0,
+          vipVerifiedAt: updatedProfile.vipVerifiedAt
+        });
+      }
+
       setUserProfile(updatedProfile);
-      localStorage.setItem('gta6_user_profile_v3', JSON.stringify(updatedProfile));
-
-      if (auth.currentUser) {
-        await updateProfile(auth.currentUser, {
-          displayName: cleanName,
-          photoURL: selectedAvatar
-        }).catch(() => {});
-      }
-
-      const uid = sanitizeUid(auth.currentUser?.uid || userProfile.uid);
-      if (uid && !userProfile.isGuest) {
-        await setDoc(
-          doc(db, 'users', uid),
-          {
-            displayName: cleanName,
-            photoURL: selectedAvatar,
-            updatedAt: new Date().toISOString()
-          },
-          { merge: true }
-        );
-      }
+      localStorage.setItem('gta6_user_profile_v4', JSON.stringify(updatedProfile));
 
       setIsEditProfileModalOpen(false);
       showToast('Профиль успешно обновлен!');
@@ -1895,14 +1796,21 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    try {
-      await signOut(auth);
-    } catch {
-      // Local session is cleared regardless
+    if (isSupabaseConfigured()) {
+      try {
+        await supabaseSignOut();
+      } catch {
+        // ignore
+      }
     }
     setUserProfile(DEFAULT_GUEST_PROFILE);
-    localStorage.removeItem('gta6_user_profile_v3');
-    showToast('Вы вышли из аккаунта (Гостевой режим)');
+    setIsVip(false);
+    setFavoriteCheats([]);
+    setFavoriteNews([]);
+    localStorage.removeItem('gta6_fav_cheats_v4');
+    localStorage.removeItem('gta6_fav_news_v4');
+    localStorage.removeItem('gta6_user_profile_v4');
+    showToast('Выход выполнен: включен гостевой режим');
   };
 
   // ==========================================================================
@@ -1996,7 +1904,12 @@ export default function App() {
 
   const filteredCheats = cheatsList
     .filter((cheat) => {
-      const matchCat = cheatCategory === 'all' || cheat.category === cheatCategory;
+      const matchCat =
+        cheatCategory === 'all'
+          ? true
+          : cheatCategory === 'saved'
+          ? favoriteCheats.includes(cheat.id)
+          : cheat.category === cheatCategory;
       const q = cheatSearch.toLowerCase().trim();
       const matchSearch =
         !q ||
@@ -2015,6 +1928,7 @@ export default function App() {
 
   const filteredNews = newsList.filter((item) => {
     if (selectedNewsCategory === 'Все') return true;
+    if (selectedNewsCategory === 'Избранное') return favoriteNews.includes(item.id);
     if (selectedNewsCategory === 'Официально') return item.tag === 'ОФИЦИАЛЬНО';
     if (selectedNewsCategory === 'Трейлеры') return item.tag === 'ТРЕЙЛЕР';
     if (selectedNewsCategory === 'Инсайды') return item.tag === 'ИНСАЙДЫ' || item.tag === 'САУНДТРЕК';
@@ -2029,7 +1943,7 @@ export default function App() {
   // ==========================================================================
 
   return (
-    <div className="min-h-screen bg-[#09090d] text-neutral-100 flex justify-center selection:bg-[#ccff00] selection:text-black">
+    <div className="min-h-screen bg-[#09090d] text-neutral-100 flex justify-center selection:bg-[#D4FF00] selection:text-black">
       {/* Mobile-first centered frame */}
       <div className="w-full max-w-md min-h-screen bg-[#09090d] flex flex-col relative border-x border-white/[0.06] shadow-2xl pb-28">
 
@@ -2039,7 +1953,7 @@ export default function App() {
         <header className="sticky top-0 z-40 bg-[#09090d]/95 backdrop-blur-xl border-b border-white/[0.06] px-5 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="font-display font-black text-xl tracking-tight text-white">
-              GTA <span className="text-[#ccff00]">VI</span>
+              GTA <span className="text-[#D4FF00]">VI</span>
             </span>
             <span
               className="text-xs font-semibold uppercase tracking-widest text-neutral-400 bg-white/[0.05] px-2.5 py-1 rounded-md border border-white/[0.08]"
@@ -2054,10 +1968,10 @@ export default function App() {
             {effectiveIsVip && (
               <button
                 onClick={() => setActiveTab('profile')}
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-[#ccff00]/15 border border-[#ccff00]/40 text-[#ccff00] text-[10px] font-bold shadow-[0_0_12px_rgba(204,255,0,0.15)]"
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-full bg-[#D4FF00]/15 border border-[#D4FF00]/40 text-[#D4FF00] text-[10px] font-bold shadow-[0_0_12px_rgba(204,255,0,0.15)]"
                 title="Leonida VIP Pass Активен"
               >
-                <Crown className="w-3.5 h-3.5 text-[#ccff00] fill-[#ccff00]" />
+                <Crown className="w-3.5 h-3.5 text-[#D4FF00] fill-[#D4FF00]" />
                 <span>VIP PASS</span>
               </button>
             )}
@@ -2085,16 +1999,16 @@ export default function App() {
 
         {/* OFFLINE BANNER */}
         {!isOnline && (
-          <div className="bg-[#ccff00]/10 border-b border-[#ccff00]/25 px-4 py-2 flex items-center justify-center space-x-2 text-xs text-[#ccff00] animate-in fade-in duration-200">
-            <WifiOff className="w-3.5 h-3.5 text-[#ccff00] shrink-0" />
+          <div className="bg-[#D4FF00]/10 border-b border-[#D4FF00]/25 px-4 py-2 flex items-center justify-center space-x-2 text-xs text-[#D4FF00] animate-in fade-in duration-200">
+            <WifiOff className="w-3.5 h-3.5 text-[#D4FF00] shrink-0" />
             <span>Офлайн-режим: читы и локальные данные доступны без интернета</span>
           </div>
         )}
 
         {/* TOAST NOTIFICATION */}
         {toastMessage && (
-          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-[#15151c] text-neutral-100 text-xs font-medium px-4 py-2.5 rounded-xl border border-[#ccff00]/40 shadow-xl flex items-center space-x-2 animate-in fade-in duration-200">
-            <BellRing className="w-4 h-4 text-[#ccff00] shrink-0" />
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-[#15151c] text-neutral-100 text-xs font-medium px-4 py-2.5 rounded-xl border border-[#D4FF00]/40 shadow-xl flex items-center space-x-2 animate-in fade-in duration-200">
+            <BellRing className="w-4 h-4 text-[#D4FF00] shrink-0" />
             <span>{toastMessage}</span>
           </div>
         )}
@@ -2109,7 +2023,7 @@ export default function App() {
               <div className="relative z-10">
                 <div className="flex items-start justify-between mb-5">
                   <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#ccff00] bg-[#ccff00]/10 px-2.5 py-1 rounded-md border border-[#ccff00]/20">
+                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#D4FF00] bg-[#D4FF00]/10 px-2.5 py-1 rounded-md border border-[#D4FF00]/20">
                       Официальный релиз
                     </span>
                     <h1 className="text-3xl font-display font-black text-white mt-2.5 tracking-tight">
@@ -2122,7 +2036,7 @@ export default function App() {
                     onClick={toggleReminder}
                     className={`p-3 rounded-2xl border transition-all cursor-pointer ${
                       isReminderSet
-                        ? 'bg-[#ccff00] text-black border-[#ccff00] shadow-md'
+                        ? 'bg-[#D4FF00] text-black border-[#D4FF00] shadow-md'
                         : 'bg-white/[0.04] text-neutral-300 border-white/[0.08] hover:border-white/20 hover:text-white'
                     }`}
                     title={isReminderSet ? 'Уведомление включено' : 'Включить напоминание о релизе'}
@@ -2131,26 +2045,12 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Countdown Numbers Grid */}
+                {/* Countdown Numbers Grid with Framer Motion Smooth Transitions */}
                 <div className="grid grid-cols-4 gap-2.5 sm:gap-4">
-                  {[
-                    { label: 'Дней', val: timeLeft.days },
-                    { label: 'Часов', val: timeLeft.hours },
-                    { label: 'Минут', val: timeLeft.minutes },
-                    { label: 'Секунд', val: timeLeft.seconds }
-                  ].map((item, i) => (
-                    <div
-                      key={i}
-                      className="flex flex-col items-center justify-center p-3 sm:p-4 rounded-2xl bg-[#09090d] border border-white/[0.06] shadow-sm"
-                    >
-                      <span className="font-mono text-2xl sm:text-3xl font-black text-white tracking-tight">
-                        {String(item.val).padStart(2, '0')}
-                      </span>
-                      <span className="text-[10px] font-semibold text-neutral-400 uppercase mt-1">
-                        {item.label}
-                      </span>
-                    </div>
-                  ))}
+                  <AnimatedCountdownSlot label="Дней" value={timeLeft.days} />
+                  <AnimatedCountdownSlot label="Часов" value={timeLeft.hours} />
+                  <AnimatedCountdownSlot label="Минут" value={timeLeft.minutes} />
+                  <AnimatedCountdownSlot label="Секунд" value={timeLeft.seconds} isSeconds />
                 </div>
 
                 <div className="mt-5 pt-4 border-t border-white/[0.06] flex items-center justify-between text-xs text-neutral-400">
@@ -2164,7 +2064,7 @@ export default function App() {
             <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] space-y-3.5 shadow-lg">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Compass className="w-4 h-4 text-[#ccff00]" />
+                  <Compass className="w-4 h-4 text-[#D4FF00]" />
                   <span className="font-display font-bold text-sm text-white uppercase tracking-wider">
                     Дорожная карта релиза
                   </span>
@@ -2208,7 +2108,7 @@ export default function App() {
                       step.status === 'completed'
                         ? 'bg-emerald-950/15 border-emerald-500/20'
                         : step.status === 'target'
-                        ? 'bg-[#ccff00]/5 border-[#ccff00]/30'
+                        ? 'bg-[#D4FF00]/5 border-[#D4FF00]/30'
                         : 'bg-white/[0.02] border-white/[0.05]'
                     }`}
                   >
@@ -2216,7 +2116,7 @@ export default function App() {
                       {step.status === 'completed' ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                       ) : step.status === 'target' ? (
-                        <Flame className="w-4 h-4 text-[#ccff00] shrink-0" />
+                        <Flame className="w-4 h-4 text-[#D4FF00] shrink-0" />
                       ) : (
                         <Clock className="w-4 h-4 text-neutral-500 shrink-0" />
                       )}
@@ -2232,7 +2132,7 @@ export default function App() {
 
             {/* LEONIDA KEY FACTS */}
             <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] space-y-3 shadow-lg">
-              <div className="flex items-center space-x-2 text-xs font-bold text-[#ccff00] uppercase tracking-wider">
+              <div className="flex items-center space-x-2 text-xs font-bold text-[#D4FF00] uppercase tracking-wider">
                 <Sparkles className="w-4 h-4" />
                 <span>Особенности штата Леонида</span>
               </div>
@@ -2274,7 +2174,7 @@ export default function App() {
                 onClick={() => setActiveTab('cheats')}
                 className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] hover:border-white/20 transition-all text-left cursor-pointer"
               >
-                <div className="flex items-center justify-between text-xs font-bold text-[#ccff00] mb-0.5">
+                <div className="flex items-center justify-between text-xs font-bold text-[#D4FF00] mb-0.5">
                   <div className="flex items-center space-x-1.5">
                     <Gamepad2 className="w-4 h-4" />
                     <span>Читы</span>
@@ -2291,9 +2191,9 @@ export default function App() {
                 onClick={() => setActiveTab('news')}
                 className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.08] hover:border-white/20 transition-all text-left cursor-pointer"
               >
-                <div className="flex items-center justify-between text-xs font-bold text-[#ccff00] mb-0.5">
+                <div className="flex items-center justify-between text-xs font-bold text-[#D4FF00] mb-0.5">
                   <div className="flex items-center space-x-1.5">
-                    <Play className="w-4 h-4 fill-[#ccff00]" />
+                    <Play className="w-4 h-4 fill-[#D4FF00]" />
                     <span>Новости</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-neutral-400" />
@@ -2329,16 +2229,16 @@ export default function App() {
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] text-neutral-300 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
                 title="Обновить читы"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCheats ? 'animate-spin text-[#ccff00]' : 'text-neutral-400'}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCheats ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`} />
                 <span>{isRefreshingCheats ? 'Загрузка...' : 'Обновить'}</span>
               </button>
             </div>
 
             {/* VIP CTA Strip if not VIP */}
             {!effectiveIsVip && (
-              <div className="p-3.5 rounded-2xl bg-[#121217] border border-[#ccff00]/30 flex items-center justify-between shadow-sm relative overflow-hidden">
+              <div className="p-3.5 rounded-2xl bg-[#121217] border border-[#D4FF00]/30 flex items-center justify-between shadow-sm relative overflow-hidden">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
+                  <div className="w-8 h-8 rounded-xl bg-[#D4FF00]/15 border border-[#D4FF00]/30 flex items-center justify-center text-[#D4FF00]">
                     <Crown className="w-4 h-4" />
                   </div>
                   <div>
@@ -2349,7 +2249,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => handleInitiateVipPurchase()}
-                  className="px-3.5 py-2 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-extrabold text-xs shadow-[0_0_14px_rgba(204,255,0,0.2)] transition-all flex items-center space-x-1.5 cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] text-black font-extrabold text-xs shadow-[0_0_14px_rgba(204,255,0,0.2)] transition-all flex items-center space-x-1.5 cursor-pointer"
                 >
                   <Crown className="w-3.5 h-3.5 fill-black" />
                   <span>Разблокировать</span>
@@ -2363,7 +2263,7 @@ export default function App() {
                 onClick={() => setPlatform('ps5')}
                 className={`py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-2 ${
                   platform === 'ps5'
-                    ? 'bg-[#ccff00] text-black shadow-md'
+                    ? 'bg-[#D4FF00] text-black shadow-md'
                     : 'text-neutral-400 hover:text-white'
                 }`}
               >
@@ -2375,7 +2275,7 @@ export default function App() {
                 onClick={() => setPlatform('xbox')}
                 className={`py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-2 ${
                   platform === 'xbox'
-                    ? 'bg-[#ccff00] text-black shadow-md'
+                    ? 'bg-[#D4FF00] text-black shadow-md'
                     : 'text-neutral-400 hover:text-white'
                 }`}
               >
@@ -2387,7 +2287,7 @@ export default function App() {
                 onClick={() => setPlatform('phone')}
                 className={`py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-2 ${
                   platform === 'phone'
-                    ? 'bg-[#ccff00] text-black shadow-md'
+                    ? 'bg-[#D4FF00] text-black shadow-md'
                     : 'text-neutral-400 hover:text-white'
                 }`}
               >
@@ -2408,7 +2308,7 @@ export default function App() {
                 placeholder="Поиск кода, суперкара, оружия..."
                 value={cheatSearch}
                 onChange={(e) => setCheatSearch(e.target.value)}
-                className="w-full bg-[#121217] border border-white/[0.08] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]/50 transition-colors"
+                className="w-full bg-[#121217] border border-white/[0.08] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]/50 transition-colors"
               />
               {cheatSearch && (
                 <button
@@ -2425,6 +2325,7 @@ export default function App() {
             <div className="flex space-x-2 overflow-x-auto pb-1 no-scrollbar text-xs font-semibold">
               {[
                 { id: 'all', label: 'Все читы' },
+                { id: 'saved', label: `Избранные ${favoriteCheats.length > 0 ? `(${favoriteCheats.length})` : ''}` },
                 { id: 'player', label: 'Игрок' },
                 { id: 'weapons', label: 'Оружие' },
                 { id: 'vehicles', label: 'Транспорт' },
@@ -2433,10 +2334,10 @@ export default function App() {
                 <button
                   key={cat.id}
                   onClick={() => setCheatCategory(cat.id)}
-                  className={`px-3.5 py-2 rounded-xl shrink-0 transition-all ${
+                  className={`px-3.5 py-2 rounded-xl shrink-0 transition-all cursor-pointer ${
                     cheatCategory === cat.id
-                      ? 'bg-white text-black font-bold'
-                      : 'bg-[#121217] text-neutral-400 hover:text-white border border-white/[0.08]'
+                      ? 'bg-gradient-to-r from-[#D4FF00] to-[#A3E635] text-black font-extrabold shadow-sm'
+                      : 'bg-[#121411] text-neutral-400 hover:text-white border border-white/[0.08]'
                   }`}
                 >
                   {cat.label}
@@ -2447,12 +2348,30 @@ export default function App() {
             {/* Cheats List */}
             <div className="space-y-3">
               {filteredCheats.length === 0 ? (
-                <div className="p-8 text-center rounded-2xl bg-[#121217] border border-white/[0.08] space-y-2">
-                  <p className="text-sm font-semibold text-neutral-300">Ничего не найдено</p>
-                  <p className="text-xs text-neutral-500">
-                    Попробуйте изменить категорию или поисковый запрос.
-                  </p>
-                </div>
+                cheatCategory === 'saved' ? (
+                  <div className="p-8 text-center rounded-2xl bg-[#121411] border border-white/[0.08] space-y-3">
+                    <div className="w-12 h-12 mx-auto rounded-full bg-[#D4FF00]/10 border border-[#D4FF00]/25 flex items-center justify-center text-[#D4FF00]">
+                      <Star className="w-6 h-6" />
+                    </div>
+                    <p className="text-sm font-semibold text-white max-w-xs mx-auto leading-relaxed">
+                      У вас пока нет сохраненных читов. Перейдите в раздел &apos;Читы&apos; и нажмите на звездочку.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCheatCategory('all')}
+                      className="px-4 py-2 rounded-xl bg-[#D4FF00]/15 hover:bg-[#D4FF00]/25 text-[#D4FF00] text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Показать все читы
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center rounded-2xl bg-[#121411] border border-white/[0.08] space-y-2">
+                    <p className="text-sm font-semibold text-neutral-300">Ничего не найдено</p>
+                    <p className="text-xs text-neutral-500">
+                      Попробуйте изменить категорию или поисковый запрос.
+                    </p>
+                  </div>
+                )
               ) : (
                 filteredCheats.map((cheat) => {
                   const isFav = favoriteCheats.includes(cheat.id);
@@ -2474,7 +2393,7 @@ export default function App() {
                         isCheatFree
                           ? 'border-emerald-500/30 hover:border-emerald-500/50'
                           : isUnlocked
-                          ? 'border-[#ccff00]/30 hover:border-[#ccff00]/50'
+                          ? 'border-[#D4FF00]/30 hover:border-[#D4FF00]/50'
                           : 'border-white/[0.08] hover:border-white/20'
                       }`}
                     >
@@ -2491,13 +2410,13 @@ export default function App() {
                                 Бесплатно
                               </span>
                             ) : isUnlocked ? (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-[#ccff00] bg-[#ccff00]/15 border-[#ccff00]/35 flex items-center space-x-1">
-                                <Crown className="w-3 h-3 text-[#ccff00] fill-[#ccff00]" />
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-[#D4FF00] bg-[#D4FF00]/15 border-[#D4FF00]/35 flex items-center space-x-1">
+                                <Crown className="w-3 h-3 text-[#D4FF00] fill-[#D4FF00]" />
                                 <span>VIP Доступ</span>
                               </span>
                             ) : (
                               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border text-neutral-300 bg-white/[0.04] border-white/[0.08] flex items-center space-x-1">
-                                <Lock className="w-3 h-3 text-[#ccff00]" />
+                                <Lock className="w-3 h-3 text-[#D4FF00]" />
                                 <span>VIP в покупке</span>
                               </span>
                             )}
@@ -2516,11 +2435,11 @@ export default function App() {
                         <button
                           onClick={() => toggleFavCheat(cheat.id)}
                           className={`p-2 rounded-xl transition-colors ml-2 shrink-0 ${
-                            isFav ? 'text-[#ccff00] bg-[#ccff00]/10' : 'text-neutral-500 hover:text-white'
+                            isFav ? 'text-[#D4FF00] bg-[#D4FF00]/10' : 'text-neutral-500 hover:text-white'
                           }`}
                           title="Сохранить в избранное"
                         >
-                          <Bookmark className={`w-4 h-4 ${isFav ? 'fill-[#ccff00]' : ''}`} />
+                          <Bookmark className={`w-4 h-4 ${isFav ? 'fill-[#D4FF00]' : ''}`} />
                         </button>
                       </div>
 
@@ -2529,7 +2448,7 @@ export default function App() {
                         {isUnlocked ? (
                           platform === 'phone' ? (
                             <div className="bg-[#09090d] border border-white/[0.08] rounded-xl p-3 flex items-center justify-between">
-                              <span className="font-mono font-bold text-sm text-[#ccff00]">
+                              <span className="font-mono font-bold text-sm text-[#D4FF00]">
                                 {cheat.codes.phone}
                               </span>
                               <span className="text-[10px] text-neutral-500 uppercase">Набор в телефоне</span>
@@ -2543,7 +2462,7 @@ export default function App() {
                           )
                         ) : (
                           /* Locked VIP Cheat with blur & CTA */
-                          <div className="relative rounded-xl overflow-hidden border border-[#ccff00]/25 bg-[#09090d] p-3">
+                          <div className="relative rounded-xl overflow-hidden border border-[#D4FF00]/25 bg-[#09090d] p-3">
                             <div className="filter blur-sm select-none opacity-30 pointer-events-none flex flex-wrap gap-1.5">
                               <span className="px-2 py-1 rounded bg-neutral-800 text-xs font-mono">▶</span>
                               <span className="px-2 py-1 rounded bg-neutral-800 text-xs font-mono">X</span>
@@ -2554,7 +2473,7 @@ export default function App() {
                             </div>
                             <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-between px-3">
                               <div className="flex items-center space-x-2">
-                                <div className="w-7 h-7 rounded-lg bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
+                                <div className="w-7 h-7 rounded-lg bg-[#D4FF00]/15 border border-[#D4FF00]/30 flex items-center justify-center text-[#D4FF00]">
                                   <Lock className="w-3.5 h-3.5" />
                                 </div>
                                 <div>
@@ -2567,7 +2486,7 @@ export default function App() {
                                   e.stopPropagation();
                                   handleInitiateVipPurchase();
                                 }}
-                                className="px-3 py-1.5 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-extrabold text-xs shadow-md transition-all flex items-center space-x-1"
+                                className="px-3 py-1.5 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] text-black font-extrabold text-xs shadow-md transition-all flex items-center space-x-1"
                               >
                                 <Crown className="w-3 h-3 fill-black" />
                                 <span>Открыть ($2.99)</span>
@@ -2603,7 +2522,7 @@ export default function App() {
                         ) : (
                           <button
                             onClick={() => handleInitiateVipPurchase()}
-                            className="text-xs font-bold py-1.5 px-3 rounded-xl border border-[#ccff00]/30 bg-[#ccff00]/10 text-[#ccff00] hover:bg-[#ccff00]/20 flex items-center space-x-1.5 transition-all"
+                            className="text-xs font-bold py-1.5 px-3 rounded-xl border border-[#D4FF00]/30 bg-[#D4FF00]/10 text-[#D4FF00] hover:bg-[#D4FF00]/20 flex items-center space-x-1.5 transition-all"
                           >
                             <Lock className="w-3.5 h-3.5" />
                             <span>Разблокировать код</span>
@@ -2644,33 +2563,67 @@ export default function App() {
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] text-neutral-300 text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
                 title="Обновить новости"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingNews ? 'animate-spin text-[#ccff00]' : 'text-neutral-400'}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingNews ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`} />
                 <span>{isRefreshingNews ? 'Загрузка...' : 'Обновить'}</span>
               </button>
             </div>
 
             {/* Category Filter Pills */}
             <div className="flex space-x-2 overflow-x-auto pb-1 no-scrollbar text-xs font-semibold">
-              {['Все', 'Официально', 'Трейлеры', 'Инсайды'].map((cat) => (
+              {['Все', 'Избранное', 'Официально', 'Трейлеры', 'Инсайды'].map((cat) => (
                 <button
                   key={cat}
                   onClick={() => {
                     setSelectedNewsCategory(cat);
                     setNewsPage(1);
                   }}
-                  className={`px-3.5 py-2 rounded-xl shrink-0 transition-all ${
+                  className={`px-3.5 py-2 rounded-xl shrink-0 transition-all cursor-pointer ${
                     selectedNewsCategory === cat
-                      ? 'bg-[#ccff00] text-black font-bold shadow-md'
-                      : 'bg-[#121217] text-neutral-400 hover:text-white border border-white/[0.08]'
+                      ? 'bg-gradient-to-r from-[#D4FF00] to-[#A3E635] text-black font-extrabold shadow-sm'
+                      : 'bg-[#121411] text-neutral-400 hover:text-white border border-white/[0.08]'
                   }`}
                 >
-                  {cat}
+                  {cat === 'Избранное' ? `Избранное ${favoriteNews.length > 0 ? `(${favoriteNews.length})` : ''}` : cat}
                 </button>
               ))}
             </div>
 
             {/* News Feed List with Sheet / Page Separation */}
             {(() => {
+              if (filteredNews.length === 0) {
+                if (selectedNewsCategory === 'Избранное') {
+                  return (
+                    <div className="p-8 text-center rounded-2xl bg-[#121411] border border-white/[0.08] space-y-3">
+                      <div className="w-12 h-12 mx-auto rounded-full bg-[#D4FF00]/10 border border-[#D4FF00]/25 flex items-center justify-center text-[#D4FF00]">
+                        <Bookmark className="w-6 h-6" />
+                      </div>
+                      <p className="text-sm font-semibold text-white max-w-xs mx-auto leading-relaxed">
+                        У вас нет сохраненных новостей. Добавляйте материалы в избранное, чтобы прочесть позже.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedNewsCategory('Все')}
+                        className="px-4 py-2 rounded-xl bg-[#D4FF00]/15 hover:bg-[#D4FF00]/25 text-[#D4FF00] text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        Смотреть все новости
+                      </button>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="p-8 text-center rounded-2xl bg-[#121411] border border-white/[0.08] space-y-2">
+                    <p className="text-sm font-semibold text-neutral-300">В этой категории пока нет новостей</p>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedNewsCategory('Все')}
+                      className="text-xs text-[#D4FF00] underline"
+                    >
+                      Показать все материалы
+                    </button>
+                  </div>
+                );
+              }
+
               const totalNewsPages = Math.max(1, Math.ceil(filteredNews.length / NEWS_PER_PAGE));
               const currentPageSafe = Math.min(newsPage, totalNewsPages);
               const displayedNews = filteredNews.slice(
@@ -2720,13 +2673,13 @@ export default function App() {
 
                           {/* Play badge */}
                           <div className="absolute bottom-3 left-3 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 flex items-center space-x-2 text-xs font-bold text-white">
-                            <Play className="w-3.5 h-3.5 text-[#ccff00] fill-[#ccff00]" />
+                            <Play className="w-3.5 h-3.5 text-[#D4FF00] fill-[#D4FF00]" />
                             <span>{news.videoDuration}</span>
                           </div>
 
                           {/* Tag */}
                           <div className="absolute top-3 left-3 flex items-center space-x-1.5">
-                            <div className="bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-bold text-[#ccff00] uppercase tracking-wider">
+                            <div className="bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-bold text-[#D4FF00] uppercase tracking-wider">
                               {news.tag}
                             </div>
                           </div>
@@ -2737,11 +2690,11 @@ export default function App() {
                               toggleFavNews(news.id);
                             }}
                             className={`absolute top-3 right-3 p-2 rounded-xl bg-black/70 backdrop-blur-md border border-white/10 transition-colors ${
-                              isFav ? 'text-[#ccff00]' : 'text-neutral-400 hover:text-white'
+                              isFav ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-white'
                             }`}
                             title="В закладки"
                           >
-                            <Bookmark className={`w-4 h-4 ${isFav ? 'fill-[#ccff00]' : ''}`} />
+                            <Bookmark className={`w-4 h-4 ${isFav ? 'fill-[#D4FF00]' : ''}`} />
                           </button>
                         </div>
 
@@ -2753,7 +2706,7 @@ export default function App() {
                             <span>{news.readTime} чтения</span>
                           </div>
 
-                          <h2 className="font-display font-bold text-base text-white group-hover:text-[#ccff00] transition-colors leading-snug">
+                          <h2 className="font-display font-bold text-base text-white group-hover:text-[#D4FF00] transition-colors leading-snug">
                             {news.title}
                           </h2>
 
@@ -2762,7 +2715,7 @@ export default function App() {
                           </p>
 
                           <div className="pt-2 flex items-center justify-between text-xs font-semibold">
-                            <span className="text-[#ccff00]">Смотреть и читать</span>
+                            <span className="text-[#D4FF00]">Смотреть и читать</span>
                             <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform text-neutral-400" />
                           </div>
                         </div>
@@ -2796,7 +2749,7 @@ export default function App() {
                               onClick={() => setNewsPage(pageNum)}
                               className={`w-8 h-8 rounded-xl text-xs font-bold transition-all ${
                                 pageNum === currentPageSafe
-                                  ? 'bg-[#ccff00] text-black shadow-md'
+                                  ? 'bg-[#D4FF00] text-black shadow-md'
                                   : 'bg-white/[0.04] text-neutral-400 hover:text-white border border-white/[0.06]'
                               }`}
                             >
@@ -2824,91 +2777,78 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 4: ПРОФИЛЬ И ИЗБРАННОЕ (PROFILE & CLOUD SYNC) */}
+        {/* TAB 4: ПРОФИЛЬ (PROFILE) */}
         {/* ================================================================== */}
         {activeTab === 'profile' && (
           <main className="flex-1 p-5 space-y-6 animate-in fade-in duration-200">
-            {/* User Identity Card */}
-            <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] space-y-4">
+            {/* 1. Шапка профиля: Аватарка, Никнейм, Статус */}
+            <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] space-y-4 shadow-xl">
               <div className="flex items-center space-x-4">
                 {userProfile.photoURL ? (
                   <img
                     src={userProfile.photoURL}
                     alt={userProfile.displayName}
                     referrerPolicy="no-referrer"
-                    className="w-14 h-14 rounded-full object-cover border-2 border-[#ccff00]"
+                    className="w-14 h-14 rounded-2xl object-cover border-2 border-[#D4FF00] shadow-[0_0_15px_rgba(212,255,0,0.2)]"
                   />
                 ) : (
-                  <div className="w-14 h-14 rounded-full bg-neutral-800 border border-white/10 flex items-center justify-center text-neutral-300">
-                    <User className="w-7 h-7" />
+                  <div className="w-14 h-14 rounded-2xl bg-neutral-800/80 border border-white/10 flex items-center justify-center text-neutral-300">
+                    <User className="w-7 h-7 text-neutral-400" />
                   </div>
                 )}
 
-                <div className="flex-1">
-                  <h2 className="text-lg font-display font-bold text-white">
-                    {userProfile.displayName}
-                  </h2>
-                  <p className="text-xs text-neutral-400 mt-0.5">
-                    {userProfile.email || 'Анонимный гостевой сеанс'}
-                  </p>
-                  <div className="flex items-center space-x-1.5 mt-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-lg font-display font-bold text-white truncate">
+                      {userProfile.displayName || (userProfile.isGuest ? 'Гость' : 'Игрок')}
+                    </h2>
+                    {effectiveIsVip && (
+                      <span className="text-[10px] font-extrabold uppercase bg-[#D4FF00] text-black px-2 py-0.5 rounded-full shrink-0">
+                        VIP
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-1.5 mt-1">
                     <span
-                      className={`w-2 h-2 rounded-full ${
-                        userProfile.isGuest ? 'bg-neutral-500' : 'bg-[#ccff00]'
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        userProfile.isGuest ? 'bg-neutral-500' : 'bg-[#D4FF00]'
                       }`}
                     />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
-                      {userProfile.statusText}
-                    </span>
+                    <p className="text-xs text-neutral-400 truncate">
+                      {userProfile.isGuest ? 'Гость' : (userProfile.email || 'Авторизован')}
+                    </p>
                   </div>
                 </div>
               </div>
 
-              {/* Profile Actions */}
+              {/* Profile Actions: Login or Edit Profile */}
               {userProfile.isGuest ? (
-                <div className="space-y-2.5">
-                  {/* Google Auth Error in Profile if any */}
-                  {authError && (
-                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-start space-x-2 text-xs text-rose-300 animate-in fade-in duration-150">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-                      <span className="leading-snug">{authError}</span>
-                    </div>
-                  )}
-
+                <div className="pt-1">
                   <button
                     type="button"
-                    onClick={handleGoogleSignIn}
-                    disabled={authLoading}
-                    className="w-full py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-900 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                    onClick={handleOpenAuthModal}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-[0_0_20px_rgba(212,255,0,0.25)] active:scale-[0.98] cursor-pointer"
                   >
-                    {authLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-neutral-900 shrink-0" />
-                        <span>Вход через Google...</span>
-                      </>
-                    ) : (
-                      <>
-                        <LogIn className="w-4 h-4 text-neutral-900 shrink-0" />
-                        <span>Войти через Google</span>
-                      </>
-                    )}
+                    <LogIn className="w-4 h-4 text-black shrink-0" />
+                    <span>Войти через Email / Supabase</span>
                   </button>
-                  <p className="text-[10px] text-neutral-400 text-center">
-                    Вход в сервис GTA 6 COMPANION • Сохранение читов и VIP-доступа
+                  <p className="text-[11px] text-neutral-400 text-center mt-2">
+                    Вход позволяет сохранять читы и избранное в облаке
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     onClick={handleOpenEditProfile}
-                    className="py-2.5 px-3 rounded-xl bg-white/[0.08] border border-white/10 text-white font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 hover:bg-white/[0.14] transition-all"
+                    className="py-2.5 px-3 rounded-xl bg-white/[0.08] border border-white/10 text-white font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 hover:bg-white/[0.14] transition-all cursor-pointer"
                   >
-                    <Edit3 className="w-3.5 h-3.5 text-[#ccff00]" />
+                    <Edit3 className="w-3.5 h-3.5 text-[#D4FF00]" />
                     <span>Имя и аватар</span>
                   </button>
                   <button
                     onClick={handleSignOut}
-                    className="py-2.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 hover:bg-rose-500/20 hover:text-rose-200 transition-all"
+                    className="py-2.5 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-1.5 hover:bg-rose-500/20 hover:text-rose-200 transition-all cursor-pointer"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     <span>Выйти</span>
@@ -2917,27 +2857,26 @@ export default function App() {
               )}
             </div>
 
-            {/* VIP PASS & MONETIZATION SECTION */}
-            <div className="rounded-3xl bg-gradient-to-br from-[#131612] via-[#121217] to-[#0c0d11] border border-[#ccff00]/30 p-5 space-y-4 shadow-xl relative overflow-hidden">
-              {/* Background ambient glow */}
-              <div className="absolute -top-12 -right-12 w-36 h-36 bg-[#ccff00]/10 rounded-full blur-2xl pointer-events-none" />
+            {/* 3. Карточка VIP Pass (покупка / статус) */}
+            <div className="rounded-3xl bg-gradient-to-br from-[#141910] via-[#10130e] to-[#0a0c09] border border-[#D4FF00]/40 p-5 space-y-4 shadow-[0_0_30px_rgba(212,255,0,0.06)] relative overflow-hidden">
+              <div className="absolute -top-12 -right-12 w-40 h-40 bg-[#D4FF00]/15 rounded-full blur-3xl pointer-events-none" />
 
               <div className="flex items-start justify-between relative z-10">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-2xl bg-[#ccff00] flex items-center justify-center text-black shadow-[0_0_16px_rgba(204,255,0,0.3)]">
-                    <Crown className="w-5 h-5 fill-black" />
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-[0_0_20px_rgba(212,255,0,0.35)] shrink-0">
+                    <Crown className="w-5 h-5 fill-black text-black" />
                   </div>
                   <div>
                     <h3 className="text-base font-display font-extrabold text-white flex items-center space-x-2">
                       <span>Leonida VIP Pass</span>
-                      {isVip && (
-                        <span className="text-[10px] uppercase font-extrabold bg-[#ccff00] text-black px-2 py-0.5 rounded-full shadow-sm">
-                          Активен
+                      {effectiveIsVip && (
+                        <span className="text-[10px] uppercase font-extrabold bg-[#D4FF00] text-black px-2.5 py-0.5 rounded-full shadow-[0_0_10px_rgba(212,255,0,0.3)]">
+                          VIP Активен
                         </span>
                       )}
                     </h3>
                     <p className="text-xs text-neutral-400 mt-0.5">
-                      {isVip
+                      {effectiveIsVip
                         ? 'Пожизненный неограниченный доступ ко всем читам и инсайдам'
                         : 'Мгновенный доступ ко всем закрытым читам и видео без рекламы'}
                     </p>
@@ -2945,130 +2884,136 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Status or Purchase Options */}
               {effectiveIsVip ? (
-                <div className="space-y-3">
-                  <div className="p-3.5 rounded-2xl bg-[#ccff00]/10 border border-[#ccff00]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-start space-x-3">
-                      <ShieldCheck className="w-5 h-5 text-[#ccff00] shrink-0 mt-0.5" />
-                      <div className="text-xs text-neutral-200 leading-relaxed">
-                        <span className="font-bold text-[#ccff00]">Статус VIP:</span> Пожизненный Leonida Pass активен. Неоновый VIP-бейдж, доступ ко всем закрытым материалам и читам.
-                        {userProfile.vipInvoiceId && (
-                          <div className="text-[11px] text-neutral-400 font-mono mt-1">
-                            Crypto Pay Инвойс: #{userProfile.vipInvoiceId}
-                          </div>
-                        )}
+                <div className="space-y-3 relative z-10 pt-1">
+                  <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center justify-between gap-3">
+                    <div className="flex items-center space-x-3">
+                      <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
+                      <div className="text-xs text-neutral-200">
+                        <span className="font-bold text-[#D4FF00]">Статус VIP активен:</span> Все закрытые секретные чит-коды и материалы доступны без ограничений.
                       </div>
                     </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => auditAndEnforceVipAuthenticity(auth.currentUser?.uid || userProfile.uid || '', true)}
-                      disabled={isAuditingVip}
-                      className="text-[11px] font-semibold text-neutral-300 hover:text-white bg-white/[0.06] hover:bg-white/[0.12] px-3 py-1.5 rounded-lg border border-white/10 flex items-center space-x-1.5 transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${isAuditingVip ? 'animate-spin' : ''}`} />
-                      <span>Сверить статус с @CryptoBot</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleRevokeVipManual}
-                      className="text-[11px] font-semibold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 px-3 py-1.5 rounded-lg border border-red-500/20 transition-all cursor-pointer"
-                    >
-                      Аннулировать VIP (Сброс)
-                    </button>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3 pt-1">
-                  <div className="p-3.5 rounded-2xl bg-black/40 border border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-3 pt-1 relative z-10">
+                  <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs font-bold text-white">Статус VIP Спонсора</div>
+                      <div className="text-xs font-bold text-white flex items-center space-x-1.5">
+                        <Crown className="w-3.5 h-3.5 text-[#D4FF00]" />
+                        <span>Пожизненный VIP статус</span>
+                      </div>
                       <div className="text-[11px] text-neutral-400 mt-0.5">
-                        Пожизненный VIP статус профиля и поддержка проекта
+                        Разблокировка всех секретных кодов и эксклюзивных инсайдов
                       </div>
                     </div>
 
                     <button
+                      type="button"
                       onClick={handleInitiateVipPurchase}
-                      className="py-2.5 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(204,255,0,0.25)] transition-all shrink-0 cursor-pointer"
+                      className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(212,255,0,0.3)] transition-all shrink-0 cursor-pointer"
                     >
-                      <Sparkles className="w-4 h-4 fill-black" />
+                      <Crown className="w-4 h-4 fill-black text-black" />
                       <span>Купить VIP за $2.99</span>
                     </button>
                   </div>
-
-                  {userProfile.isGuest && (
-                    <p className="text-[11px] text-neutral-400 text-center flex items-center justify-center space-x-1">
-                      <AlertCircle className="w-3.5 h-3.5 text-[#ccff00] shrink-0" />
-                      <span>Для привязки VIP рекомендуется войти через Google</span>
-                    </p>
-                  )}
                 </div>
               )}
             </div>
 
-            {/* Saved Cheats Section */}
+            {/* 4. Блок: Сохраненные читы */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-400">
-                  Сохраненные читы ({savedCheatItems.length})
+                <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-400 flex items-center space-x-2">
+                  <span>Сохраненные читы</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-white/[0.06] text-[#D4FF00]">
+                    {savedCheatItems.length}
+                  </span>
                 </h2>
                 {savedCheatItems.length > 0 && (
                   <button
                     onClick={() => setActiveTab('cheats')}
-                    className="text-xs text-[#ccff00] hover:underline"
+                    className="text-xs text-[#D4FF00] hover:underline cursor-pointer"
                   >
-                    Перейти к читам →
+                    Все читы →
                   </button>
                 )}
               </div>
 
               {savedCheatItems.length === 0 ? (
-                <div className="p-4 rounded-2xl bg-[#121217] border border-white/[0.08] text-center text-xs text-neutral-400">
-                  Нет сохраненных кодов. Добавьте их во вкладке «Читы».
+                <div className="p-6 rounded-2xl bg-[#121411] border border-white/[0.08] text-center space-y-2.5">
+                  <div className="w-10 h-10 mx-auto rounded-full bg-[#D4FF00]/10 border border-[#D4FF00]/20 flex items-center justify-center text-[#D4FF00]">
+                    <Gamepad2 className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs text-neutral-300 font-medium leading-relaxed max-w-xs mx-auto">
+                    У вас пока нет сохраненных читов. Перейдите в раздел &apos;Читы&apos; и нажмите на звездочку.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('cheats')}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-[#D4FF00]/15 hover:bg-[#D4FF00]/25 text-[#D4FF00] font-semibold text-xs transition-colors cursor-pointer"
+                  >
+                    <span>Перейти в раздел Читы</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2">
                   {savedCheatItems.map((cheat) => (
                     <div
                       key={cheat.id}
-                      className="p-3 rounded-xl bg-[#121217] border border-white/[0.08] flex items-center justify-between"
+                      className="p-3.5 rounded-2xl bg-[#121411] border border-white/[0.08] flex items-center justify-between gap-3 hover:border-white/20 transition-colors"
                     >
-                      <div className="truncate mr-3">
+                      <div className="truncate min-w-0">
                         <div className="font-bold text-sm text-white truncate">
                           {cheat.title}
                         </div>
-                        <div className="text-xs text-neutral-400 truncate">
+                        <div className="text-xs text-[#D4FF00] truncate font-mono mt-0.5">
                           {cheat.codes.phone}
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => toggleFavCheat(cheat.id)}
-                        className="p-1.5 text-neutral-400 hover:text-red-400 transition-colors"
-                        title="Удалить из избранного"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center space-x-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyCheat(cheat)}
+                          className="p-2 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-neutral-300 hover:text-white transition-colors cursor-pointer"
+                          title="Скопировать чит"
+                        >
+                          {copiedId === cheat.id ? (
+                            <Check className="w-4 h-4 text-[#D4FF00]" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleFavCheat(cheat.id)}
+                          className="p-2 rounded-lg bg-white/[0.05] hover:bg-rose-500/20 text-neutral-400 hover:text-rose-400 transition-colors cursor-pointer"
+                          title="Удалить из избранного"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* Saved News Section */}
+            {/* 4. Блок: Избранные новости */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-400">
-                  Избранные материалы ({savedNewsItems.length})
+                <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-400 flex items-center space-x-2">
+                  <span>Избранные новости</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-white/[0.06] text-[#D4FF00]">
+                    {savedNewsItems.length}
+                  </span>
                 </h2>
                 {savedNewsItems.length > 0 && (
                   <button
                     onClick={() => setActiveTab('news')}
-                    className="text-xs text-[#ccff00] hover:underline"
+                    className="text-xs text-[#D4FF00] hover:underline cursor-pointer"
                   >
                     Все новости →
                   </button>
@@ -3076,8 +3021,21 @@ export default function App() {
               </div>
 
               {savedNewsItems.length === 0 ? (
-                <div className="p-4 rounded-2xl bg-[#121217] border border-white/[0.08] text-center text-xs text-neutral-400">
-                  Нет сохраненных новостей. Нажмите на закладку во вкладке «Новости».
+                <div className="p-6 rounded-2xl bg-[#121411] border border-white/[0.08] text-center space-y-2.5">
+                  <div className="w-10 h-10 mx-auto rounded-full bg-[#D4FF00]/10 border border-[#D4FF00]/20 flex items-center justify-center text-[#D4FF00]">
+                    <Bookmark className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs text-neutral-300 font-medium leading-relaxed max-w-xs mx-auto">
+                    У вас нет сохраненных новостей. Добавляйте материалы в закладки, чтобы прочесть позже.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('news')}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-[#D4FF00]/15 hover:bg-[#D4FF00]/25 text-[#D4FF00] font-semibold text-xs transition-colors cursor-pointer"
+                  >
+                    <span>Открыть ленту новостей</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -3088,23 +3046,24 @@ export default function App() {
                         setActiveModalNews(news);
                         setIsVideoPlaying(false);
                       }}
-                      className="p-3 rounded-xl bg-[#121217] border border-white/[0.08] flex items-center justify-between cursor-pointer hover:border-white/20 transition-colors"
+                      className="p-3.5 rounded-2xl bg-[#121411] border border-white/[0.08] flex items-center justify-between gap-3 cursor-pointer hover:border-[#D4FF00]/30 transition-colors"
                     >
-                      <div className="truncate mr-3">
+                      <div className="truncate min-w-0">
                         <div className="font-bold text-sm text-white truncate">
                           {news.title}
                         </div>
-                        <div className="text-xs text-neutral-400">
+                        <div className="text-xs text-neutral-400 mt-0.5">
                           {news.date}
                         </div>
                       </div>
 
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleFavNews(news.id);
                         }}
-                        className="p-1.5 text-neutral-400 hover:text-red-400 transition-colors"
+                        className="p-2 rounded-lg bg-white/[0.05] hover:bg-rose-500/20 text-neutral-400 hover:text-rose-400 transition-colors cursor-pointer shrink-0"
                         title="Удалить"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -3124,7 +3083,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab('timer')}
             className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
-              activeTab === 'timer' ? 'text-[#ccff00]' : 'text-neutral-400 hover:text-neutral-200'
+              activeTab === 'timer' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Clock className="w-5 h-5 mb-1" />
@@ -3134,7 +3093,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab('cheats')}
             className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
-              activeTab === 'cheats' ? 'text-[#ccff00]' : 'text-neutral-400 hover:text-neutral-200'
+              activeTab === 'cheats' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Gamepad2 className="w-5 h-5 mb-1" />
@@ -3144,7 +3103,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab('news')}
             className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
-              activeTab === 'news' ? 'text-[#ccff00]' : 'text-neutral-400 hover:text-neutral-200'
+              activeTab === 'news' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Play className="w-5 h-5 mb-1" />
@@ -3154,7 +3113,7 @@ export default function App() {
           <button
             onClick={() => setActiveTab('profile')}
             className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all ${
-              activeTab === 'profile' ? 'text-[#ccff00]' : 'text-neutral-400 hover:text-neutral-200'
+              activeTab === 'profile' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <User className="w-5 h-5 mb-1" />
@@ -3171,7 +3130,7 @@ export default function App() {
               {/* Modal Top Header */}
               <div className="p-4 border-b border-white/[0.08] flex items-center justify-between bg-[#121217]">
                 <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-[#ccff00] bg-[#ccff00]/10 px-2.5 py-1 rounded-md">
+                  <span className="text-xs font-bold text-[#D4FF00] bg-[#D4FF00]/10 px-2.5 py-1 rounded-md">
                     {activeModalNews.tag}
                   </span>
                   <span className="text-xs text-neutral-400">
@@ -3184,7 +3143,7 @@ export default function App() {
                     onClick={() => toggleFavNews(activeModalNews.id)}
                     className={`p-2 rounded-full border transition-colors ${
                       favoriteNews.includes(activeModalNews.id)
-                        ? 'bg-[#ccff00]/15 text-[#ccff00] border-[#ccff00]/30'
+                        ? 'bg-[#D4FF00]/15 text-[#D4FF00] border-[#D4FF00]/30'
                         : 'bg-white/[0.05] text-neutral-300 border-white/10 hover:text-white'
                     }`}
                     title={
@@ -3195,7 +3154,7 @@ export default function App() {
                   >
                     <Bookmark
                       className={`w-4 h-4 ${
-                        favoriteNews.includes(activeModalNews.id) ? 'fill-[#ccff00]' : ''
+                        favoriteNews.includes(activeModalNews.id) ? 'fill-[#D4FF00]' : ''
                       }`}
                     />
                   </button>
@@ -3259,7 +3218,7 @@ export default function App() {
 
                         {/* Central Play Button */}
                         <div className="relative z-10 flex-1 flex flex-col items-center justify-center space-y-2">
-                          <div className="w-14 h-14 rounded-full bg-[#ccff00] text-black flex items-center justify-center shadow-[0_0_25px_rgba(204,255,0,0.5)] group-hover:scale-110 active:scale-95 transition-all">
+                          <div className="w-14 h-14 rounded-full bg-[#D4FF00] text-black flex items-center justify-center shadow-[0_0_25px_rgba(204,255,0,0.5)] group-hover:scale-110 active:scale-95 transition-all">
                             <Play className="w-6 h-6 ml-0.5 fill-black" />
                           </div>
                           <span className="text-xs font-bold text-white bg-black/70 px-3 py-1 rounded-full border border-white/10">
@@ -3268,7 +3227,7 @@ export default function App() {
                         </div>
 
                         <div className="relative z-10 p-3 text-xs text-neutral-300 flex justify-between items-center">
-                          <span className="font-semibold text-[#ccff00]">YouTube Player</span>
+                          <span className="font-semibold text-[#D4FF00]">YouTube Player</span>
                           <span className="text-neutral-400">Официальный ролик</span>
                         </div>
                       </div>
@@ -3288,7 +3247,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setIsVideoPlaying(true)}
-                        className="text-[#ccff00] hover:underline font-semibold flex items-center space-x-1"
+                        className="text-[#D4FF00] hover:underline font-semibold flex items-center space-x-1"
                       >
                         <Play className="w-3 h-3 fill-current" />
                         <span>Запустить плеер</span>
@@ -3299,7 +3258,7 @@ export default function App() {
                       href={activeModalNews.videoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[#ccff00] hover:underline flex items-center space-x-1"
+                      className="text-[#D4FF00] hover:underline flex items-center space-x-1"
                     >
                       <span>Открыть в YouTube</span>
                       <ExternalLink className="w-3.5 h-3.5" />
@@ -3317,13 +3276,13 @@ export default function App() {
                 {/* Key Facts Box */}
                 {activeModalNews.keyFacts && activeModalNews.keyFacts.length > 0 && (
                   <div className="rounded-2xl bg-[#121217] border border-white/[0.08] p-4 space-y-2.5">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#ccff00]">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#D4FF00]">
                       Ключевые факты
                     </h3>
                     <ul className="space-y-1.5 text-xs text-neutral-300">
                       {activeModalNews.keyFacts.map((fact, idx) => (
                         <li key={idx} className="flex items-start space-x-2">
-                          <span className="text-[#ccff00] font-bold">•</span>
+                          <span className="text-[#D4FF00] font-bold">•</span>
                           <span>{fact}</span>
                         </li>
                       ))}
@@ -3332,7 +3291,7 @@ export default function App() {
                 )}
 
                 {/* Prominent Verified Source Box */}
-                <div className="rounded-2xl bg-gradient-to-br from-[#121217] to-[#1a1a24] border border-[#ccff00]/30 p-4 space-y-3">
+                <div className="rounded-2xl bg-gradient-to-br from-[#121217] to-[#1a1a24] border border-[#D4FF00]/30 p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
@@ -3351,7 +3310,7 @@ export default function App() {
                     href={activeModalNews.sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 shadow-lg transition-all"
+                    className="w-full py-3 px-4 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] text-black font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 shadow-lg transition-all"
                   >
                     <span>Перейти к первоисточнику</span>
                     <ExternalLink className="w-4 h-4" />
@@ -3372,7 +3331,7 @@ export default function App() {
             <div className="w-full max-w-sm bg-[#121217] border border-white/10 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 animate-in slide-in-from-bottom duration-300 shadow-2xl">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-[#ccff00]/10 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
+                  <div className="w-8 h-8 rounded-xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center justify-center text-[#D4FF00]">
                     <Edit3 className="w-4 h-4" />
                   </div>
                   <div>
@@ -3408,7 +3367,7 @@ export default function App() {
                     value={editDisplayName}
                     onChange={(e) => setEditDisplayName(e.target.value)}
                     placeholder="Введите ваш никнейм"
-                    className="w-full bg-[#09090d] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#ccff00]/60 transition-colors"
+                    className="w-full bg-[#09090d] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]/60 transition-colors"
                   />
                 </div>
 
@@ -3431,7 +3390,7 @@ export default function App() {
                           <div
                             className={`w-12 h-12 rounded-2xl overflow-hidden relative border-2 transition-all ${
                               isSelected
-                                ? 'border-[#ccff00] ring-2 ring-[#ccff00]/30 scale-105'
+                                ? 'border-[#D4FF00] ring-2 ring-[#D4FF00]/30 scale-105'
                                 : 'border-white/10 hover:border-white/30'
                             }`}
                           >
@@ -3442,8 +3401,8 @@ export default function App() {
                               className="w-full h-full object-cover"
                             />
                             {isSelected && (
-                              <div className="absolute inset-0 bg-[#ccff00]/20 flex items-center justify-center">
-                                <CheckCircle2 className="w-4 h-4 text-[#ccff00] fill-black" />
+                              <div className="absolute inset-0 bg-[#D4FF00]/20 flex items-center justify-center">
+                                <CheckCircle2 className="w-4 h-4 text-[#D4FF00] fill-black" />
                               </div>
                             )}
                           </div>
@@ -3478,7 +3437,7 @@ export default function App() {
                   <button
                     type="submit"
                     disabled={editProfileLoading}
-                    className="py-2.5 px-3 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] disabled:bg-neutral-800 disabled:text-neutral-500 text-black font-display font-bold text-xs uppercase flex items-center justify-center space-x-1.5 transition-all shadow-md"
+                    className="py-2.5 px-3 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] disabled:bg-neutral-800 disabled:text-neutral-500 text-black font-display font-bold text-xs uppercase flex items-center justify-center space-x-1.5 transition-all shadow-md"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>{editProfileLoading ? 'Сохранение...' : 'Сохранить'}</span>
@@ -3494,9 +3453,9 @@ export default function App() {
         {/* ================================================================== */}
         {guestVipWarningModal && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
-            <div className="w-full max-w-sm bg-[#121217] border border-[#ccff00]/30 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom duration-300">
+            <div className="w-full max-w-sm bg-[#121217] border border-[#D4FF00]/30 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom duration-300">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-2xl bg-[#ccff00]/15 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00] shrink-0">
+                <div className="w-10 h-10 rounded-2xl bg-[#D4FF00]/15 border border-[#D4FF00]/30 flex items-center justify-center text-[#D4FF00] shrink-0">
                   <ShieldAlert className="w-5 h-5" />
                 </div>
                 <div>
@@ -3518,13 +3477,12 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setGuestVipWarningModal(false);
-                    handleGoogleSignIn();
+                    handleOpenAuthModal();
                   }}
-                  disabled={authLoading}
-                  className="w-full py-3 px-4 rounded-xl bg-white hover:bg-neutral-100 text-neutral-950 font-display font-bold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all shadow-md active:scale-[0.98] cursor-pointer"
                 >
-                  <LogIn className="w-4 h-4 text-neutral-950 shrink-0" />
-                  <span>Войти через Google</span>
+                  <LogIn className="w-4 h-4 text-black shrink-0" />
+                  <span>Войти в аккаунт</span>
                 </button>
 
                 <button
@@ -3543,12 +3501,12 @@ export default function App() {
         {/* ================================================================== */}
         {activeInvoice && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
-            <div className="w-full max-w-sm bg-[#121217] border border-[#2AABEE]/40 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom duration-300">
+            <div className="w-full max-w-sm bg-[#0e110d] border border-[#D4FF00]/40 rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-[0_0_40px_rgba(0,0,0,0.8)] animate-in slide-in-from-bottom duration-300">
               {/* CryptoBot Header */}
               <div className="flex items-center justify-between border-b border-white/10 pb-3">
                 <div className="flex items-center space-x-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#2AABEE] to-[#229ED9] flex items-center justify-center text-white shadow-md">
-                    <Send className="w-4 h-4 fill-white" />
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-md">
+                    <Send className="w-4 h-4 fill-black text-black" />
                   </div>
                   <div>
                     <div className="font-display font-bold text-xs tracking-wider text-white">
@@ -3560,7 +3518,7 @@ export default function App() {
 
                 <button
                   onClick={() => setActiveInvoice(null)}
-                  className="p-1 rounded-full text-neutral-400 hover:text-white transition-colors"
+                  className="p-1 rounded-full text-neutral-400 hover:text-white transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3578,7 +3536,7 @@ export default function App() {
                     </p>
                   </div>
                   <div className="text-right">
-                    <span className="font-mono font-black text-lg text-[#ccff00]">
+                    <span className="font-mono font-black text-lg text-[#D4FF00]">
                       {activeInvoice.amount} {activeInvoice.asset}
                     </span>
                     <div className="text-[10px] text-neutral-400">≈ $2.99 USD</div>
@@ -3594,7 +3552,7 @@ export default function App() {
                   </div>
                   <div className="flex justify-between items-center text-neutral-400">
                     <span>Статус счета:</span>
-                    <span className="text-[#ccff00] font-medium flex items-center space-x-1">
+                    <span className="text-[#D4FF00] font-medium flex items-center space-x-1">
                       <Clock className="w-3 h-3" />
                       <span>Ожидание оплаты</span>
                     </span>
@@ -3608,9 +3566,9 @@ export default function App() {
                   invoiceFeedback.status === 'paid'
                     ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                     : invoiceFeedback.status === 'unpaid'
-                    ? 'bg-[#ccff00]/10 border-[#ccff00]/30 text-[#ccff00]'
+                    ? 'bg-[#D4FF00]/10 border-[#D4FF00]/30 text-[#D4FF00]'
                     : invoiceFeedback.status === 'checking'
-                    ? 'bg-[#2AABEE]/10 border-[#2AABEE]/30 text-[#2AABEE]'
+                    ? 'bg-[#D4FF00]/15 border-[#D4FF00]/40 text-[#D4FF00]'
                     : invoiceFeedback.status === 'error'
                     ? 'bg-red-500/10 border-red-500/30 text-red-300'
                     : 'bg-white/[0.04] border-white/10 text-neutral-300'
@@ -3618,11 +3576,11 @@ export default function App() {
               >
                 <div className="flex items-start space-x-2">
                   {invoiceFeedback.status === 'checking' ? (
-                    <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-[#2AABEE] mt-0.5" />
+                    <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-[#D4FF00] mt-0.5" />
                   ) : invoiceFeedback.status === 'paid' ? (
                     <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
                   ) : invoiceFeedback.status === 'unpaid' ? (
-                    <AlertCircle className="w-4 h-4 shrink-0 text-[#ccff00] mt-0.5" />
+                    <AlertCircle className="w-4 h-4 shrink-0 text-[#D4FF00] mt-0.5" />
                   ) : invoiceFeedback.status === 'error' ? (
                     <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
                   ) : (
@@ -3651,9 +3609,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => openExternalUrl(activeInvoice.pay_url)}
-                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#2AABEE] to-[#229ED9] hover:from-[#35b5f6] hover:to-[#2AABEE] text-white font-display font-bold text-sm tracking-wide flex items-center justify-center space-x-2 transition-all shadow-lg cursor-pointer text-center"
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-sm tracking-wide flex items-center justify-center space-x-2 transition-all shadow-[0_0_20px_rgba(212,255,0,0.25)] cursor-pointer text-center"
                 >
-                  <Send className="w-4 h-4 fill-white shrink-0" />
+                  <Send className="w-4 h-4 fill-black text-black shrink-0" />
                   <span>1. Оплатить в Telegram @CryptoBot</span>
                   <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-80 shrink-0" />
                 </button>
@@ -3666,8 +3624,8 @@ export default function App() {
                 >
                   {hasCopiedInvoiceUrl ? (
                     <>
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-300 font-semibold">Ссылка скопирована в буфер!</span>
+                      <Check className="w-3.5 h-3.5 text-[#D4FF00]" />
+                      <span className="text-[#D4FF00] font-semibold">Ссылка скопирована в буфер!</span>
                     </>
                   ) : (
                     <>
@@ -3683,7 +3641,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => openExternalUrl(activeInvoice.web_app_invoice_url!)}
-                      className="inline-flex items-center space-x-1 text-[11px] text-[#2AABEE] hover:underline cursor-pointer"
+                      className="inline-flex items-center space-x-1 text-[11px] text-[#D4FF00] hover:underline cursor-pointer"
                     >
                       <span>Открыть счет в браузере (Crypto Pay Web)</span>
                       <ExternalLink className="w-3 h-3" />
@@ -3696,16 +3654,16 @@ export default function App() {
                   type="button"
                   onClick={handleVerifyAndActivateInvoice}
                   disabled={isCheckingInvoice}
-                  className="w-full py-3 px-4 rounded-xl bg-[#ccff00] hover:bg-[#b8e600] text-black font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(204,255,0,0.25)] transition-all cursor-pointer disabled:opacity-50"
+                  className="w-full py-3 px-4 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/10 text-white font-display font-extrabold text-xs tracking-wider uppercase flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-4 h-4 ${isCheckingInvoice ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-4 h-4 ${isCheckingInvoice ? 'animate-spin text-[#D4FF00]' : ''}`} />
                   <span>
                     {isCheckingInvoice ? 'Связь с CryptoBot...' : '2. Проверить оплату и активировать'}
                   </span>
                 </button>
 
                 <div className="text-[10px] text-center text-neutral-400 flex items-center justify-center space-x-1.5 pt-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#D4FF00] animate-pulse" />
                   <span>Шлюз: pay.crypt.bot • Официальный Crypto Pay API</span>
                 </div>
               </div>
@@ -3716,8 +3674,8 @@ export default function App() {
         {/* Processing Payment Overlay */}
         {isProcessingPayment && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex justify-center items-center p-4">
-            <div className="p-6 rounded-2xl bg-[#121217] border border-[#2AABEE]/40 flex flex-col items-center space-y-3 text-center shadow-2xl animate-in zoom-in-95 duration-150">
-              <Loader2 className="w-8 h-8 animate-spin text-[#2AABEE]" />
+            <div className="p-6 rounded-2xl bg-[#0e110d] border border-[#D4FF00]/40 flex flex-col items-center space-y-3 text-center shadow-2xl animate-in zoom-in-95 duration-150">
+              <Loader2 className="w-8 h-8 animate-spin text-[#D4FF00]" />
               <div className="font-display font-bold text-sm text-white">
                 Создание счета в Telegram @CryptoBot...
               </div>
@@ -3729,23 +3687,23 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* MODAL: GOOGLE AUTHENTICATION */}
+        {/* MODAL: AUTHENTICATION (LOGIN / REGISTER) */}
         {/* ================================================================== */}
         {isAuthModalOpen && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-150">
-            <div className="w-full sm:max-w-md bg-[#121217] border border-white/[0.12] rounded-t-3xl sm:rounded-3xl p-6 space-y-5 shadow-2xl animate-in slide-in-from-bottom-6 sm:zoom-in-95 duration-200">
+            <div className="w-full sm:max-w-md bg-[#0e110d] border border-white/[0.12] rounded-t-3xl sm:rounded-3xl p-6 space-y-4 shadow-[0_0_40px_rgba(0,0,0,0.8)] animate-in slide-in-from-bottom-6 sm:zoom-in-95 duration-200">
               {/* Header */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#ccff00] to-lime-500 flex items-center justify-center text-neutral-950 shadow-lg shrink-0 font-display font-black text-sm">
-                    GTA
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-[0_0_16px_rgba(212,255,0,0.3)] shrink-0 font-display font-black text-sm">
+                    VI
                   </div>
                   <div>
                     <h3 className="font-display font-bold text-white text-base tracking-wide">
-                      Вход в сервис GTA 6 COMPANION
+                      {authMode === 'register' ? 'Регистрация аккаунта' : 'Вход в аккаунт'}
                     </h3>
                     <p className="text-xs text-neutral-400">
-                      Синхронизация профиля, читов и VIP-доступа
+                      Синхронизация профиля и избранного
                     </p>
                   </div>
                 </div>
@@ -3759,6 +3717,40 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Login / Register Toggle Tabs */}
+              <div className="grid grid-cols-2 gap-1 p-1 bg-black/50 border border-white/[0.08] rounded-xl text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 rounded-lg flex items-center justify-center space-x-1.5 transition-all cursor-pointer ${
+                    authMode === 'login'
+                      ? 'bg-[#D4FF00] text-black font-bold shadow-md'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Вход</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 rounded-lg flex items-center justify-center space-x-1.5 transition-all cursor-pointer ${
+                    authMode === 'register'
+                      ? 'bg-[#D4FF00] text-black font-bold shadow-md'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Регистрация</span>
+                </button>
+              </div>
+
               {/* Error Message */}
               {authError && (
                 <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-start space-x-2 text-xs text-rose-300 animate-in fade-in duration-150">
@@ -3767,42 +3759,102 @@ export default function App() {
                 </div>
               )}
 
-              {/* Information */}
-              <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] space-y-2 text-xs text-neutral-300 leading-relaxed">
-                <p>
-                  Войдите через Google аккаунт в один клик. Это позволит синхронизировать сохраненные чит-коды, избранные новости и ваш VIP-статус на всех ваших устройствах.
-                </p>
-              </div>
+              {/* Form */}
+              <form onSubmit={handleAuthSubmit} className="space-y-3.5 pt-1">
+                {authMode === 'register' && (
+                  <div>
+                    <label className="block text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-1.5">
+                      Никнейм игрока
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        required
+                        value={authDisplayName}
+                        onChange={(e) => setAuthDisplayName(e.target.value)}
+                        placeholder="Например: Джейсон или Лусия"
+                        className="w-full bg-[#121411] border border-white/[0.1] rounded-xl pl-9.5 pr-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00] transition-colors"
+                      />
+                    </div>
+                  </div>
+                )}
 
-              {/* Google Sign-In Button */}
-              <div className="space-y-3 pt-1">
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  disabled={authLoading}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-neutral-100 text-neutral-950 font-display font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2.5 transition-all shadow-md active:scale-[0.98] disabled:opacity-50 cursor-pointer"
-                >
-                  {authLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-                      <span>Вход через Google...</span>
-                    </>
-                  ) : (
-                    <>
-                      <LogIn className="w-4 h-4 text-neutral-950" />
-                      <span>Войти через Google</span>
-                    </>
-                  )}
-                </button>
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-1.5">
+                    Электронная почта
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="email"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="player@vicecity.com"
+                      className="w-full bg-[#121411] border border-white/[0.1] rounded-xl pl-9.5 pr-3.5 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00] transition-colors"
+                    />
+                  </div>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setIsAuthModalOpen(false)}
-                  className="w-full py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white text-xs font-semibold transition-colors cursor-pointer text-center"
-                >
-                  Продолжить как Гость
-                </button>
-              </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-1.5">
+                    Пароль (минимум 6 символов)
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-[#121411] border border-white/[0.1] rounded-xl pl-9.5 pr-10 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00] transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 space-y-2">
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_20px_rgba(212,255,0,0.25)] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                  >
+                    {authLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-black" />
+                        <span>Авторизация...</span>
+                      </>
+                    ) : authMode === 'register' ? (
+                      <>
+                        <UserPlus className="w-4 h-4 text-black" />
+                        <span>Зарегистрироваться</span>
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-4 h-4 text-black" />
+                        <span>Войти в аккаунт</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsAuthModalOpen(false)}
+                    className="w-full py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white text-xs font-semibold transition-colors cursor-pointer text-center"
+                  >
+                    Продолжить как гость
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

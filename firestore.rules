@@ -1,38 +1,51 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Helper functions for zero-trust security
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Default deny
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Default deny: Block all unauthorized reads and writes across the entire database
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Cheats collection: public read for all visitors
+    // Cheats collection: Read-only for all visitors.
+    // Writes are completely blocked from client SDKs so hackers cannot tamper with codes.
     match /cheats/{cheatId} {
-      allow read: if true;
-      allow create, update: if isValidId(cheatId);
-      allow delete: if false;
+      allow read: if isValidId(cheatId);
+      allow write: if false;
     }
 
-    // News collection: public read for all visitors
+    // News collection: Read-only for all visitors.
+    // Writes are completely blocked so hackers cannot inject malicious links or spoof news.
     match /news/{newsId} {
-      allow read: if true;
-      allow create, update: if isValidId(newsId);
-      allow delete: if false;
+      allow read: if isValidId(newsId);
+      allow write: if false;
     }
 
-    // Health check test
+    // Health check test document
     match /test/{testId} {
       allow read: if true;
+      allow write: if false;
     }
 
-    // User favorites sync and profile management
+    // Private User Space: Zero-Trust ABAC
+    // STRICT RULE: Only the authenticated user can read or write their own document (/users/{userId}).
+    // Unauthenticated visitors and third-party hackers receive PERMISSION_DENIED.
+    // Listing the /users collection is completely forbidden.
     match /users/{userId} {
-      allow read: if isValidId(userId);
-      allow create, update, delete: if isValidId(userId);
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidId(userId);
     }
   }
 }
