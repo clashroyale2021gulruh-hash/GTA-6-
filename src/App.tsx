@@ -22,13 +22,12 @@ import {
   AlertCircle,
   Send,
   RefreshCw,
+  ChevronLeft,
   Compass,
   Flame,
+  Sparkles,
   Star,
-  Cpu,
-  MapPin,
-  Key,
-  Navigation
+  Cpu
 } from 'lucide-react';
 import {
   getHardwareDeviceId,
@@ -36,18 +35,22 @@ import {
   saveFavoriteCheats,
   saveFavoriteNews,
   saveVipStatus,
-  validateVipKey,
+  saveDeviceProfile,
+  getCachedNews,
+  saveCachedNews,
+  getLastNewsSync,
+  saveLastNewsSync,
   DEFAULT_AVATAR,
   DeviceProfile
 } from './utils/deviceStorage';
 import { safeFetchJson, openExternalUrl } from './utils/api';
+import { INITIAL_GTA_NEWS } from './data/newsFeed';
 
 // ============================================================================
-// TYPES & DEFINITIONS
+// TYPES & DATA STRUCTURES
 // ============================================================================
 
 export type PlatformType = 'ps5' | 'xbox' | 'phone';
-export type TabType = 'timer' | 'cheats' | 'map' | 'news' | 'profile';
 
 export interface CheatItem {
   id: string;
@@ -78,17 +81,6 @@ export interface NewsItem {
   sourceUrl: string;
 }
 
-export interface LocationItem {
-  id: string;
-  name: string;
-  category: 'city' | 'nature' | 'water' | 'secret';
-  tag: string;
-  threatLevel: 'Низкий' | 'Средний' | 'Высокий' | 'Экстремальный';
-  description: string;
-  highlights: string[];
-  coordinates: string;
-}
-
 export interface CryptoInvoice {
   invoice_id: number;
   hash?: string;
@@ -105,7 +97,8 @@ export interface CryptoInvoice {
 }
 
 // ============================================================================
-// 100% OFFLINE DATASETS
+// LEONIDA VERIFIED CHEATS CATALOG
+// All cheats are completely accessible immediately without blocks or paywalls
 // ============================================================================
 
 export const GTA_CHEATS: CheatItem[] = [
@@ -179,7 +172,7 @@ export const GTA_CHEATS: CheatItem[] = [
     id: 'cheat_fast_run',
     title: 'Сверхскоростной спринт (Fast Sprint)',
     category: 'player',
-    description: 'Увеличивает максимальную скорость бега персонажа в 2.5 раза без накопления усталости.',
+    description: 'Увеличивает максимальную скорость бега персонажа в 2.5 раза без усталости.',
     codes: {
       ps5: ['△', 'LEFT', 'RIGHT', 'RIGHT', 'L2', 'L1', '▢'],
       xbox: ['Y', 'LEFT', 'RIGHT', 'RIGHT', 'LT', 'LB', 'X'],
@@ -276,237 +269,11 @@ export const GTA_CHEATS: CheatItem[] = [
   }
 ];
 
-export const GTA_NEWS: NewsItem[] = [
-  {
-    id: 'news_trailer_2_release',
-    title: 'Rockstar Games представила Трейлер 2: Вайс-Сити, Джейсон и новая физика',
-    tag: 'ТРЕЙЛЕР',
-    date: '20 Сентября 2026',
-    readTime: '4 мин',
-    image: 'https://img.youtube.com/vi/kYJzEwXzH_8/maxresdefault.jpg',
-    youtubeId: 'kYJzEwXzH_8',
-    videoUrl: 'https://www.youtube.com/watch?v=kYJzEwXzH_8',
-    videoDuration: '02:45',
-    summary: 'Долгожданный второй официальный трейлер GTA VI вышел! В ролике подробно показан Джейсон, ночной Вайс-Сити, катера и масштабные погони полиции округа Леонида.',
-    content: [
-      'Студия Rockstar Games официально опубликовала Трейлер 2 Grand Theft Auto VI, произведя колоссальный фурор в мировом игровом сообществе.',
-      'Трейлер сосредоточен на втором протагонисте Джейсоне, его взаимоотношениях с Люсией, подготовке дерзких ограблений и исследовании ночной жизни Вайс-Сити.',
-      'Ролик демонстрирует беспрецедентный уровень детализации: реалистичные волны и гидродинамика, густая растительность болот Грассриверс, неоновые отражения на мокром асфальте и сотни уникальных моделей NPC с живым поведением.'
-    ],
-    keyFacts: [
-      'Второй официальный трейлер Grand Theft Auto VI уже доступен',
-      'Фокус на персонаже Джейсоне и совместных налетах дуэта с Люсией',
-      'Показаны новые локации: округ Келли, порт Вайс и тропические острова Леониды',
-      'Запись сделана напрямую на PlayStation 5 в реальном времени'
-    ],
-    sourceName: 'Rockstar Games YouTube & Newswire',
-    sourceUrl: 'https://www.rockstargames.com/VI'
-  },
-  {
-    id: 'news_gameplay_deep_dive',
-    title: 'Детальный геймплей GTA VI: физика перестрелок, инвентарь и ИИ полиции',
-    tag: 'ТРЕЙЛЕР',
-    date: '19 Сентября 2026',
-    readTime: '6 мин',
-    image: 'https://img.youtube.com/vi/VpC2u_2hV60/maxresdefault.jpg',
-    youtubeId: 'VpC2u_2hV60',
-    videoUrl: 'https://www.youtube.com/watch?v=VpC2u_2hV60',
-    videoDuration: '10:30',
-    summary: 'Rockstar раскрыла детальный геймплей игры: переработанная баллистика, тактическое переключение между героями, багажник оружия и умный ИИ полиции.',
-    content: [
-      'Rockstar Games выпустила масштабный обзор игрового процесса GTA VI, подтвердивший эволюционный скачок в симуляции открытого мира.',
-      'В демонстрации раскрыта механика инвентаря: тяжелое оружие теперь хранится в багажнике личного автомобиля, а персонажи могут скрытно носить лишь пистолеты и компактные ПП.',
-      'Полиция округа Леонида получила обновленную тактику координации: патрульные перекрывают перекрестки, вызывают воздушную поддержку и оцепляют районы с помощью шипов и броневиков.'
-    ],
-    keyFacts: [
-      'Реалистичный инвентарь с ограничением переносимого оружия и багажником авто',
-      'Бесшовное тактическое переключение между Люсией и Джейсоном в миссиях',
-      'Продвинутый ИИ блюстителей порядка и свидетелей преступлений',
-      'Полная интерактивность интерьеров магазинов, мотелей и ломбардов'
-    ],
-    sourceName: 'Rockstar Games Gameplay Showcase',
-    sourceUrl: 'https://www.rockstargames.com/VI'
-  },
-  {
-    id: 'news_t2_release_2026',
-    title: 'Take-Two подтвердила окно релиза GTA VI — осень 2026 года',
-    tag: 'ОФИЦИАЛЬНО',
-    date: '18 Сентября 2026',
-    readTime: '3 мин',
-    image: 'https://img.youtube.com/vi/QdBZY2fkU-0/maxresdefault.jpg',
-    youtubeId: 'QdBZY2fkU-0',
-    videoUrl: 'https://www.youtube.com/watch?v=QdBZY2fkU-0',
-    videoDuration: '01:31',
-    summary: 'Генеральный директор Take-Two Штраус Зельник подтвердил инвесторам, что разработка идет по графику к осени 2026 года без переносов.',
-    content: [
-      'В финансовом отчете Take-Two Interactive перед инвесторами руководство компании официально повторило, что окно премьеры Grand Theft Auto VI назначено на осень 2026 года.',
-      'Штраус Зельник подчеркнул: «Студия Rockstar Games стремится к абсолютному совершенству, и наши ожидания от коммерческого успеха игры полностью оправданы».',
-      'Релиз состоится одновременно на PlayStation 5 и Xbox Series X|S, а версия для ПК выйдет позже согласно традиционной политике издателя.'
-    ],
-    keyFacts: [
-      'Релиз подтвержден на осень 2026 года без задержек',
-      'Стартовые платформы: PlayStation 5 и Xbox Series X|S',
-      'Прогнозируемый доход в первый год продаж превысит $1 млрд'
-    ],
-    sourceName: 'Take-Two Interactive / SEC Filings',
-    sourceUrl: 'https://www.take2games.com'
-  },
-  {
-    id: 'news_vice_city_map_scale',
-    title: 'Карта штата Леонида: масштаб превышает GTA V в 2.5 раза',
-    tag: 'ИНСАЙДЫ',
-    date: '10 Сентября 2026',
-    readTime: '4 мин',
-    image: 'https://img.youtube.com/vi/VpC2u_2hV60/hqdefault.jpg',
-    youtubeId: 'VpC2u_2hV60',
-    videoUrl: 'https://www.youtube.com/watch?v=VpC2u_2hV60',
-    videoDuration: '07:48',
-    summary: 'Картографический проект сообщества завершил реконструкцию штата: города, болота, порты и тропические острова.',
-    content: [
-      'Сообщество энтузиастов-картографов свело спутниковые снимки, официальные ролики и координаты патчей, подтвердив гигантский размер карты.',
-      'Штат Леонида включает мегаполис Вайс-Сити, промышленный Порт-Геллхорн, курортный архипелаг Леонаида-Кис и обширные болота Грассриверс.',
-      'Плотность зданий с возможностью входа увеличена более чем в 3 раза по сравнению с любой предыдущей игрой Rockstar.'
-    ],
-    keyFacts: [
-      'Площадь суши и прибрежных вод превышает 130 кв. км',
-      'Сотни интерактивных интерьеров: клубы, супермаркеты, ломбарды и мотели',
-      'Бесшовные переходы между сушей, водой и воздушным пространством'
-    ],
-    sourceName: 'GTA Mapping Project & Bloomberg',
-    sourceUrl: 'https://www.bloomberg.com'
-  },
-  {
-    id: 'news_ps5_pro_enhanced',
-    title: 'PS5 Pro и Xbox: 60 FPS, трассировка лучей и апскейлинг PSSR',
-    tag: 'ОФИЦИАЛЬНО',
-    date: '5 Сентября 2026',
-    readTime: '4 мин',
-    image: 'https://img.youtube.com/vi/QdBZY2fkU-0/maxresdefault.jpg',
-    youtubeId: 'QdBZY2fkU-0',
-    videoUrl: 'https://www.youtube.com/watch?v=QdBZY2fkU-0',
-    videoDuration: '01:31',
-    summary: 'Инженеры подтверждают внедрение аппаратного PSSR для поддержки 60 FPS при максимальном качестве графики и лучах.',
-    content: [
-      'Благодаря архитектуре PlayStation 5 Pro и технологии Spectral Super Resolution (PSSR), GTA VI получит режим производительности с 60 FPS.',
-      'Трассировка лучей будет рассчитывать глобальное освещение, неоновые отражения в лужах Вайс-Сити и тени в реальном времени.',
-      'Базовые версии PS5 и Xbox Series X получат режим качества в динамическом 4K с кинематографическим освещением.'
-    ],
-    keyFacts: [
-      'Режим 60 FPS на консолях нового поколения PS5 Pro',
-      'Аппаратный расчет объемного тумана и солнечных лучей God Rays',
-      'Мгновенная загрузка локаций благодаря кастомным NVMe SSD'
-    ],
-    sourceName: 'Digital Foundry Analysis',
-    sourceUrl: 'https://www.eurogamer.net'
-  },
-  {
-    id: 'news_soundtrack_hits',
-    title: 'Культовый саундтрек Вайс-Сити: Том Петти и 15 радиостанций',
-    tag: 'САУНДТРЕК',
-    date: '29 Августа 2026',
-    readTime: '3 мин',
-    image: 'https://img.youtube.com/vi/2R26Xw0rVnI/maxresdefault.jpg',
-    youtubeId: '2R26Xw0rVnI',
-    videoUrl: 'https://www.youtube.com/watch?v=2R26Xw0rVnI',
-    videoDuration: '04:07',
-    summary: 'Хит Тома Петти взлетел на 36,000% в Spotify. Радиостанции предложат классический синтвейв, рок и латино-бит.',
-    content: [
-      'Песня «Love Is A Long Road» Тома Петти установила рекорд мировых стримингов после выхода трейлера игры.',
-      'В игре подтверждено возвращение культовой волны Flash FM, а также появление новых латиноамериканских и рэп-станций штата.',
-      'Аудиосистема RAGE 9 поддерживает пространственный звук: музыка меняется при открытых окнах авто или входе в ночной клуб.'
-    ],
-    keyFacts: [
-      'Более 200 лицензированных треков от мировых исполнителей',
-      'Возвращение культовых диджеев и юмористических ток-шоу',
-      'Динамический саундтрек при полицейских погонях и ограблениях'
-    ],
-    sourceName: 'Billboard Music & Spotify',
-    sourceUrl: 'https://www.billboard.com'
-  }
-];
+// ============================================================================
+// VERIFIED GTA VI NEWS & INSIDER REPORTS
+// ============================================================================
 
-export const LEONIDA_LOCATIONS: LocationItem[] = [
-  {
-    id: 'loc_ocean_beach',
-    name: 'Ocean Beach & Ocean Drive',
-    category: 'city',
-    tag: 'ВАЙС-СИТИ',
-    threatLevel: 'Низкий',
-    description: 'Жемчужина ночного Вайс-Сити: знаменитый променад с неоновыми отелями ар-деко, пальмами, спорткарами и клубами.',
-    highlights: ['Отель Malibu Club', 'Спавн спорткаров Cheetah', 'Набережная серферов'],
-    coordinates: '25.7781° N, 80.1313° W'
-  },
-  {
-    id: 'loc_downtown',
-    name: 'Даунтаун Вайс-Сити (Downtown)',
-    category: 'city',
-    tag: 'МЕГАПОЛИС',
-    threatLevel: 'Средний',
-    description: 'Финансовый центр штата Леонида. Высотные стеклянные небоскребы, крыши для прыжков с парашютом и вертолетные площадки.',
-    highlights: ['Штаб-квартиры корпораций', 'Арена корриды и шоу', 'Элитные пентхаусы'],
-    coordinates: '25.7617° N, 80.1918° W'
-  },
-  {
-    id: 'loc_vice_port',
-    name: 'Порт Вайс-Сити (Vice Port)',
-    category: 'water',
-    tag: 'ДОКИ И ВОДА',
-    threatLevel: 'Высокий',
-    description: 'Крупнейший грузовой морской узел. Контейнерные терминалы, склады контрабандистов и стоянки скоростных катеров.',
-    highlights: ['Морские катера Squalo', 'Контрабандные склады', 'Краны и контейнеры'],
-    coordinates: '25.7420° N, 80.1750° W'
-  },
-  {
-    id: 'loc_grassrivers',
-    name: 'Болота Грассриверс (Everglades)',
-    category: 'nature',
-    tag: 'ДИКАЯ ПРИРОДА',
-    threatLevel: 'Экстремальный',
-    description: 'Бескрайние дикие топи с аллигаторами, густой тропической растительностью, аэролодками и тайными убежищами.',
-    highlights: ['Глиссеры-аэролодки', 'Ферма гигантских аллигаторов', 'Лагеря браконьеров'],
-    coordinates: '25.6800° N, 80.6500° W'
-  },
-  {
-    id: 'loc_leonard_county',
-    name: 'Округ Келли и Леонард (Kelly County)',
-    category: 'city',
-    tag: 'ПРОВИНЦИЯ',
-    threatLevel: 'Средний',
-    description: 'Одноэтажная Америка: мотели, трейлерные парки, ломбарды, автозаправки и грунтовые дороги сельской Леониды.',
-    highlights: ['Мотель Джека и Люсии', 'Магазины оружия Ammu-Nation', 'Полицейские участки'],
-    coordinates: '25.9200° N, 80.3400° W'
-  },
-  {
-    id: 'loc_leonida_keys',
-    name: 'Архипелаг Леонида-Кис (The Keys)',
-    category: 'water',
-    tag: 'ОСТРОВА',
-    threatLevel: 'Низкий',
-    description: 'Цепь тропических коралловых островов, соединенных легендарным 11-мильным мостом Overseas Highway над открытым океаном.',
-    highlights: ['Мост Overseas Highway', 'Дайвинг и коралловые рифы', 'Гидропланы'],
-    coordinates: '24.6500° N, 81.3000° W'
-  },
-  {
-    id: 'loc_escobar_airport',
-    name: 'Аэропорт Эскобар (Escobar Intl)',
-    category: 'secret',
-    tag: 'АВИАЦИЯ',
-    threatLevel: 'Высокий',
-    description: 'Главная воздушная гавань штата с тремя взлетно-посадочными полосами, грузовыми ангарами и частными джетами.',
-    highlights: ['Пассажирские лайнеры', 'Частные джеты Nimbus', 'Охраняемая зона'],
-    coordinates: '25.7959° N, 80.2870° W'
-  },
-  {
-    id: 'loc_port_gellhorn',
-    name: 'Порт-Геллхорн (Port Gellhorn)',
-    category: 'city',
-    tag: 'ПРОМЗОНА',
-    threatLevel: 'Высокий',
-    description: 'Западный прибрежный промышленный город, известный своими ночными гонками, автомастерскими и заброшенными складами.',
-    highlights: ['Подпольные тюнинг-гаражи', 'Трассы ночного дрифта', 'Ломбарды'],
-    coordinates: '26.1200° N, 81.8000° W'
-  }
-];
+export const GTA_NEWS: NewsItem[] = INITIAL_GTA_NEWS;
 
 // Target release timestamp: November 19, 2026
 const TARGET_RELEASE_TIMESTAMP = new Date('2026-11-19T00:00:00Z').getTime();
@@ -565,24 +332,23 @@ const AnimatedCountdownSlot: React.FC<AnimatedCountdownSlotProps> = ({ value, la
 // ============================================================================
 
 export default function App() {
-  // Navigation Tabs: timer | cheats | map | news | profile
-  const [activeTab, setActiveTab] = useState<TabType>('timer');
+  // Navigation Tabs: timer | cheats | news | profile
+  const [activeTab, setActiveTab] = useState<'timer' | 'cheats' | 'news' | 'profile'>('timer');
 
   // Controller Platform: ps5 | xbox | phone
   const [platform, setPlatform] = useState<PlatformType>('ps5');
 
-  // Cheats State
+  // Cheats Search & Filter State
   const [cheatCategory, setCheatCategory] = useState<string>('all');
   const [cheatSearch, setCheatSearch] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Map / Content State
-  const [mapCategory, setMapCategory] = useState<string>('all');
-  const [mapSearch, setMapSearch] = useState<string>('');
-  const [selectedLocation, setSelectedLocation] = useState<LocationItem | null>(null);
-
-  // News State
+  // News Filter & Modal State
+  const [newsList, setNewsList] = useState<NewsItem[]>(INITIAL_GTA_NEWS);
+  const [isSyncingNews, setIsSyncingNews] = useState<boolean>(false);
+  const [lastNewsSyncText, setLastNewsSyncText] = useState<string>('Проверено');
   const [newsCategory, setNewsCategory] = useState<string>('Все');
+  const [newsSearch, setCheatNewsSearch] = useState<string>('');
   const [activeModalNews, setActiveModalNews] = useState<NewsItem | null>(null);
   const [isVideoPlaying, setIsVideoPlaying] = useState<boolean>(false);
   const [newsPage, setNewsPage] = useState<number>(1);
@@ -600,14 +366,6 @@ export default function App() {
   const [favoriteCheats, setFavoriteCheats] = useState<string[]>([]);
   const [favoriteNews, setFavoriteNews] = useState<string[]>([]);
 
-  // VIP Key Activation Input State (Profile Screen)
-  const [vipKeyInput, setVipKeyInput] = useState<string>('');
-  const [vipKeyFeedback, setVipKeyFeedback] = useState<{ type: 'idle' | 'success' | 'error'; message: string }>({
-    type: 'idle',
-    message: ''
-  });
-  const [isActivatingKey, setIsActivatingKey] = useState<boolean>(false);
-
   // UI Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -620,7 +378,7 @@ export default function App() {
   });
   const [isReminderSet, setIsReminderSet] = useState<boolean>(false);
 
-  // VIP Pass CryptoBot Invoice State
+  // VIP Pass Purchase & Verification State (@CryptoBot)
   const [activeInvoice, setActiveInvoice] = useState<CryptoInvoice | null>(null);
   const [hasCopiedInvoiceUrl, setHasCopiedInvoiceUrl] = useState<boolean>(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
@@ -633,16 +391,56 @@ export default function App() {
     message: 'Счет ожидает оплаты в Telegram @CryptoBot.'
   });
 
+  // Show Toast Helper
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
   // ==========================================================================
-  // INITIALIZATION: INSTANT 0.1s OFFLINE LOAD FROM @capacitor/preferences
+  // AUTOMATIC NEWS FEED SYNC (FETCH ON EACH APP LAUNCH & CACHING)
+  // ==========================================================================
+
+  const syncNewsFromNetwork = async (isManual = false) => {
+    if (isManual) setIsSyncingNews(true);
+    try {
+      const res = await safeFetchJson<{
+        ok: boolean;
+        items: NewsItem[];
+        lastUpdated?: string;
+      }>('/api/news');
+
+      if (res.ok && res.data?.items && Array.isArray(res.data.items) && res.data.items.length > 0) {
+        setNewsList(res.data.items);
+        await saveCachedNews(res.data.items);
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const label = `Обновлено в ${timeStr}`;
+        setLastNewsSyncText(label);
+        await saveLastNewsSync(label);
+        if (isManual) {
+          showToast(`Лента обновлена (${res.data.items.length} статей)`);
+        }
+      } else if (isManual) {
+        showToast('Сервер пока не содержит новых статей');
+      }
+    } catch {
+      if (isManual) {
+        showToast('Не удалось связаться с сервером новостей');
+      }
+    } finally {
+      if (isManual) {
+        setIsSyncingNews(false);
+      }
+    }
+  };
+
+  // ==========================================================================
+  // BOOTSTRAP: INSTANT 0.1s INITIALIZATION FROM DEVICE PREFERENCES + AUTO-SYNC
   // ==========================================================================
 
   useEffect(() => {
+    // 1) Load hardware-linked data from @capacitor/preferences
     loadDeviceStorageData().then((data) => {
       setDeviceId(data.deviceId);
       setFavoriteCheats(data.favCheats);
@@ -651,14 +449,28 @@ export default function App() {
       setUserProfile(data.profile);
     });
 
+    // 2) Load cached news from preferences for instant render
+    getCachedNews<NewsItem>().then((cached) => {
+      if (cached && cached.length > 0) {
+        setNewsList(cached);
+      }
+    });
+
+    getLastNewsSync().then((savedTime) => {
+      if (savedTime) setLastNewsSyncText(savedTime);
+    });
+
     try {
       const reminderVal = localStorage.getItem('gta6_reminder_enabled') === 'true';
       setIsReminderSet(reminderVal);
     } catch {}
+
+    // 3) Automatic silent fetch on every app startup without blocking UI
+    syncNewsFromNetwork(false);
   }, []);
 
   // ==========================================================================
-  // COUNTDOWN ENGINE
+  // COUNTDOWN TIMER ENGINE
   // ==========================================================================
 
   useEffect(() => {
@@ -698,7 +510,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // FAVORITES HANDLERS
+  // FAVORITES PERSISTENCE WITH DEVICE LOCK (@capacitor/preferences)
   // ==========================================================================
 
   const toggleFavCheat = async (id: string) => {
@@ -755,67 +567,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // VIP KEY ACTIVATION (NATIVE ANDROID KEYBOARD HANDLING)
-  // ==========================================================================
-
-  const handleActivateVipKey = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const cleanKey = vipKeyInput.trim().toUpperCase();
-
-    if (!cleanKey) {
-      setVipKeyFeedback({
-        type: 'error',
-        message: 'Пожалуйста, введите лицензионный VIP-ключ.'
-      });
-      return;
-    }
-
-    setIsActivatingKey(true);
-    setVipKeyFeedback({ type: 'idle', message: '' });
-
-    // Validate key
-    const isValid = validateVipKey(cleanKey);
-
-    if (isValid) {
-      setIsVip(true);
-      const updatedProfile: DeviceProfile = {
-        ...userProfile,
-        isVip: true,
-        statusText: 'Пожизненный Leonida VIP Pass',
-        vipInvoiceId: cleanKey,
-        vipVerifiedAt: new Date().toISOString(),
-        activationMethod: 'license_key'
-      };
-      setUserProfile(updatedProfile);
-
-      // Persist to @capacitor/preferences
-      await saveVipStatus(true, {
-        invoiceId: cleanKey,
-        amount: '0.00',
-        asset: 'LICENSE_KEY',
-        verifiedAt: new Date().toISOString(),
-        method: 'license_key'
-      });
-
-      setVipKeyFeedback({
-        type: 'success',
-        message: `VIP-ключ ${cleanKey} успешно активирован!`
-      });
-      showToast('Пожизненный Leonida VIP Pass успешно активирован!');
-      setVipKeyInput('');
-    } else {
-      setVipKeyFeedback({
-        type: 'error',
-        message: 'Неверный VIP-ключ. Проверьте правильность или используйте промо-ключ: VIP-LEONIDA-2026'
-      });
-      showToast('Неверный VIP-ключ');
-    }
-
-    setIsActivatingKey(false);
-  };
-
-  // ==========================================================================
-  // VIP CRYPTOBOT PURCHASE
+  // VIP PASS: REAL CRYPTOBOT INTEGRATION & DEVICE LOCK ACTIVATION
   // ==========================================================================
 
   const handleInitiateVipPurchase = async () => {
@@ -845,10 +597,11 @@ export default function App() {
         setActiveInvoice(res.data.result);
         setInvoiceFeedback({
           status: 'idle',
-          message: `Счет #${res.data.result.invoice_id} на 2.99 USDT создан в @CryptoBot.`
+          message: `Счет #${res.data.result.invoice_id} на 2.99 USDT создан в @CryptoBot. Перейдите по ссылке ниже для оплаты.`
         });
         openExternalUrl(res.data.result.pay_url);
       } else {
+        // Direct bot deeplink fallback
         const directBotUrl = `https://t.me/CryptoBot?start=VIP_GTA6_${safePayload}`;
         const fallbackInvoice: CryptoInvoice = {
           invoice_id: Math.floor(Date.now() / 1000),
@@ -862,6 +615,10 @@ export default function App() {
           created_at: new Date().toISOString()
         };
         setActiveInvoice(fallbackInvoice);
+        setInvoiceFeedback({
+          status: 'idle',
+          message: 'Прямой шлюз Telegram @CryptoBot открыт. Нажмите кнопку ниже для завершения оплаты.'
+        });
         showToast('Счет открыт! Переход в Telegram @CryptoBot...');
         openExternalUrl(directBotUrl);
       }
@@ -927,24 +684,23 @@ export default function App() {
           vipInvoiceId: activeInvoice.invoice_id,
           vipAmount: activeInvoice.amount,
           vipAsset: activeInvoice.asset,
-          vipVerifiedAt: new Date().toISOString(),
-          activationMethod: 'cryptobot'
+          vipVerifiedAt: new Date().toISOString()
         };
         setUserProfile(updatedProfile);
 
+        // Save in Secure Storage with Device Lock
         await saveVipStatus(true, {
           invoiceId: activeInvoice.invoice_id,
           amount: activeInvoice.amount,
           asset: activeInvoice.asset,
-          verifiedAt: new Date().toISOString(),
-          method: 'cryptobot'
+          verifiedAt: new Date().toISOString()
         });
 
         setInvoiceFeedback({
           status: 'paid',
-          message: 'Транзакция подтверждена! VIP Pass активирован.'
+          message: 'Транзакция 2.99 USDT подтверждена! Пожизненный VIP Pass активирован.'
         });
-        showToast('Оплата подтверждена! VIP Pass активирован!');
+        showToast('Оплата подтверждена! Пожизненный VIP Pass активирован!');
         setTimeout(() => setActiveInvoice(null), 2000);
       } else {
         setInvoiceFeedback({
@@ -956,7 +712,7 @@ export default function App() {
     } catch {
       setInvoiceFeedback({
         status: 'error',
-        message: 'Не удалось проверить статус счета. Повторите попытку.'
+        message: 'Не удалось проверить статус счета. Проверьте интернет или повторите позже.'
       });
       showToast('Ошибка проверки счета');
     } finally {
@@ -1037,7 +793,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // FILTERED DATA
+  // FILTERED CHEATS & NEWS
   // ==========================================================================
 
   const filteredCheats = useMemo(() => {
@@ -1060,32 +816,22 @@ export default function App() {
     });
   }, [cheatCategory, cheatSearch, favoriteCheats]);
 
-  const filteredLocations = useMemo(() => {
-    return LEONIDA_LOCATIONS.filter((loc) => {
-      if (mapCategory !== 'all' && loc.category !== mapCategory) {
-        return false;
-      }
-
-      if (mapSearch.trim()) {
-        const q = mapSearch.toLowerCase();
-        const matchesName = loc.name.toLowerCase().includes(q);
-        const matchesDesc = loc.description.toLowerCase().includes(q);
-        const matchesTag = loc.tag.toLowerCase().includes(q);
-        return matchesName || matchesDesc || matchesTag;
-      }
-
-      return true;
-    });
-  }, [mapCategory, mapSearch]);
-
   const filteredNews = useMemo(() => {
-    return GTA_NEWS.filter((item) => {
+    return newsList.filter((item) => {
       if (newsCategory !== 'Все' && item.tag !== newsCategory) {
         return false;
       }
+
+      if (newsSearch.trim()) {
+        const query = newsSearch.toLowerCase();
+        const matchesTitle = item.title.toLowerCase().includes(query);
+        const matchesSummary = item.summary.toLowerCase().includes(query);
+        return matchesTitle || matchesSummary;
+      }
+
       return true;
     });
-  }, [newsCategory]);
+  }, [newsCategory, newsSearch, newsList]);
 
   const totalNewsPages = Math.ceil(filteredNews.length / NEWS_PER_PAGE);
   const pagedNews = filteredNews.slice((newsPage - 1) * NEWS_PER_PAGE, newsPage * NEWS_PER_PAGE);
@@ -1095,8 +841,8 @@ export default function App() {
   }, [favoriteCheats]);
 
   const savedNewsItems = useMemo(() => {
-    return GTA_NEWS.filter((n) => favoriteNews.includes(n.id));
-  }, [favoriteNews]);
+    return newsList.filter((n) => favoriteNews.includes(n.id));
+  }, [favoriteNews, newsList]);
 
   return (
     <div className="min-h-screen bg-[#09090d] text-neutral-100 flex flex-col font-sans select-none antialiased pb-20">
@@ -1120,7 +866,7 @@ export default function App() {
               </div>
               <div className="text-[10px] text-neutral-400 flex items-center space-x-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#D4FF00]" />
-                <span>100% Offline-Ready</span>
+                <span>Штат Леонида • Вайс-Сити</span>
               </div>
             </div>
           </div>
@@ -1148,7 +894,7 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 1: ТАЙМЕР РЕЛИЗА (COUNTDOWN & ROADMAP) */}
+        {/* TAB 1: ТАЙМЕР РЕЛИЗА (COUNTDOWN) */}
         {/* ================================================================== */}
         {activeTab === 'timer' && (
           <main className="flex-1 p-4 space-y-5 animate-in fade-in duration-150">
@@ -1179,6 +925,7 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Animated Countdown Slots */}
                 <div className="grid grid-cols-4 gap-2">
                   <AnimatedCountdownSlot label="Дней" value={timeLeft.days} />
                   <AnimatedCountdownSlot label="Часов" value={timeLeft.hours} />
@@ -1264,18 +1011,18 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setActiveTab('map')}
+                onClick={() => setActiveTab('news')}
                 className="p-3.5 rounded-2xl bg-[#121217] border border-white/[0.08] hover:border-[#D4FF00]/40 transition-all text-left cursor-pointer"
               >
                 <div className="flex items-center justify-between text-xs font-bold text-[#D4FF00] mb-0.5">
                   <div className="flex items-center space-x-1.5">
-                    <MapPin className="w-4 h-4" />
-                    <span>Атлас Леониды</span>
+                    <Play className="w-4 h-4 fill-[#D4FF00]" />
+                    <span>Новости</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-neutral-400" />
                 </div>
                 <p className="text-[11px] text-neutral-400">
-                  Карта и локации
+                  4K Видео и статьи
                 </p>
               </button>
             </div>
@@ -1283,7 +1030,7 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 2: ЧИТ-КОДЫ */}
+        {/* TAB 2: ЧИТ-КОДЫ (ВСЕ ЧИТЫ ОТКРЫТЫ И ДОСТУПНЫ) */}
         {/* ================================================================== */}
         {activeTab === 'cheats' && (
           <main className="flex-1 p-4 space-y-4 animate-in fade-in duration-150">
@@ -1392,7 +1139,7 @@ export default function App() {
                   </p>
                   <p className="text-xs text-neutral-500">
                     {cheatCategory === 'saved'
-                      ? 'Нажмите на значок закладки у любого чита, чтобы сохранить его.'
+                      ? 'Нажмите на значок закладки у любого чита, чтобы добавить его сюда.'
                       : 'Попробуйте изменить поисковый запрос.'}
                   </p>
                 </div>
@@ -1491,199 +1238,55 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 3: КАРТА И АТЛАС ЛЕОНИДЫ (CONTENT & LOCATIONS) */}
+        {/* TAB 3: НОВОСТИ И 4K ВИДЕО */}
         {/* ================================================================== */}
-        {activeTab === 'map' && (
+        {activeTab === 'news' && (
           <main className="flex-1 p-4 space-y-4 animate-in fade-in duration-150">
-            <div>
-              <h1 className="text-2xl font-display font-black text-white">
-                Атлас штата Леонида
-              </h1>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                Районы Вайс-Сити, секретные точки, спавны транспорта и болота
-              </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-display font-black text-white">
+                  Новости GTA VI
+                </h1>
+                <div className="flex items-center space-x-1.5 text-xs text-neutral-400 mt-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#D4FF00]" />
+                  <span>{lastNewsSyncText}</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => syncNewsFromNetwork(true)}
+                disabled={isSyncingNews}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-xs font-semibold text-white transition-all cursor-pointer disabled:opacity-50"
+                title="Обновить ленту"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[#D4FF00] ${isSyncingNews ? 'animate-spin' : ''}`} />
+                <span>{isSyncingNews ? 'Синхронизация...' : 'Обновить'}</span>
+              </button>
             </div>
 
             {/* Search Input */}
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
               <input
                 type="text"
-                placeholder="Поиск района, локации или секрета..."
-                value={mapSearch}
-                onChange={(e) => setMapSearch(e.target.value)}
-                className="w-full bg-[#121217] border border-white/[0.08] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]/50 transition-colors"
+                value={newsSearch}
+                onChange={(e) => {
+                  setCheatNewsSearch(e.target.value);
+                  setNewsPage(1);
+                }}
+                placeholder="Поиск по статьям и трейлерам..."
+                className="w-full bg-[#121217] border border-white/[0.08] focus:border-[#D4FF00]/50 rounded-2xl pl-10 pr-9 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none transition-all"
               />
-              {mapSearch && (
+              {newsSearch && (
                 <button
                   type="button"
-                  onClick={() => setMapSearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white p-1"
+                  onClick={() => setCheatNewsSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white p-1"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
-            </div>
-
-            {/* Categories */}
-            <div className="flex space-x-1.5 overflow-x-auto pb-1 no-scrollbar text-xs font-semibold">
-              {[
-                { id: 'all', label: 'Все локации' },
-                { id: 'city', label: 'Город Вайс-Сити' },
-                { id: 'nature', label: 'Болота и природа' },
-                { id: 'water', label: 'Вода и острова' },
-                { id: 'secret', label: 'Секретные зоны' }
-              ].map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setMapCategory(cat.id)}
-                  className={`px-3 py-1.5 rounded-xl shrink-0 transition-all cursor-pointer ${
-                    mapCategory === cat.id
-                      ? 'bg-[#D4FF00] text-black font-extrabold shadow-sm'
-                      : 'bg-[#121411] text-neutral-400 hover:text-white border border-white/[0.08]'
-                  }`}
-                >
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Locations Cards List */}
-            <div className="space-y-3">
-              {filteredLocations.map((loc) => (
-                <div
-                  key={loc.id}
-                  onClick={() => setSelectedLocation(loc)}
-                  className="p-4 rounded-2xl bg-[#121217] border border-white/[0.08] hover:border-[#D4FF00]/40 transition-all cursor-pointer space-y-2.5 shadow-md"
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#D4FF00]/10 border border-[#D4FF00]/30 text-[#D4FF00]">
-                          {loc.tag}
-                        </span>
-                        <span
-                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
-                            loc.threatLevel === 'Экстремальный'
-                              ? 'text-rose-400 border-rose-500/30 bg-rose-950/30'
-                              : loc.threatLevel === 'Высокий'
-                              ? 'text-amber-400 border-amber-500/30 bg-amber-950/30'
-                              : 'text-emerald-400 border-emerald-500/30 bg-emerald-950/30'
-                          }`}
-                        >
-                          Угроза: {loc.threatLevel}
-                        </span>
-                      </div>
-                      <h3 className="font-display font-bold text-sm text-white mt-1.5">
-                        {loc.name}
-                      </h3>
-                    </div>
-
-                    <div className="w-8 h-8 rounded-xl bg-white/[0.04] flex items-center justify-center text-neutral-400">
-                      <Navigation className="w-4 h-4 text-[#D4FF00]" />
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-neutral-300 leading-relaxed">
-                    {loc.description}
-                  </p>
-
-                  <div className="pt-1 flex flex-wrap gap-1.5">
-                    {loc.highlights.map((h, i) => (
-                      <span
-                        key={i}
-                        className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-lg bg-black/40 border border-white/[0.06] text-neutral-300"
-                      >
-                        • {h}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="pt-2 border-t border-white/[0.04] flex items-center justify-between text-[11px] text-neutral-400">
-                    <span className="font-mono">{loc.coordinates}</span>
-                    <span className="text-[#D4FF00] font-semibold">Подробнее →</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Location Detail Modal */}
-            {selectedLocation && (
-              <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
-                <div className="w-full max-w-sm bg-[#0e110d] border border-white/10 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200">
-                  <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
-                    <div className="flex items-center space-x-2">
-                      <MapPin className="w-5 h-5 text-[#D4FF00]" />
-                      <h3 className="font-display font-bold text-base text-white">
-                        {selectedLocation.name}
-                      </h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedLocation(null)}
-                      className="p-1 rounded-full text-neutral-400 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-3 text-xs">
-                    <div className="flex justify-between items-center p-2.5 rounded-xl bg-black/50 border border-white/[0.06]">
-                      <span className="text-neutral-400">Сектор:</span>
-                      <span className="font-bold text-[#D4FF00]">{selectedLocation.tag}</span>
-                    </div>
-
-                    <div className="flex justify-between items-center p-2.5 rounded-xl bg-black/50 border border-white/[0.06]">
-                      <span className="text-neutral-400">Координаты GPS:</span>
-                      <span className="font-mono text-neutral-200">{selectedLocation.coordinates}</span>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-black/30 border border-white/[0.06] space-y-1.5">
-                      <span className="text-[10px] uppercase font-bold text-neutral-400">Описание сектора</span>
-                      <p className="text-neutral-300 leading-relaxed">{selectedLocation.description}</p>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] uppercase font-bold text-[#D4FF00]">Ключевые точки и транспорт</span>
-                      <div className="space-y-1">
-                        {selectedLocation.highlights.map((item, idx) => (
-                          <div key={idx} className="flex items-center space-x-2 p-2 rounded-lg bg-white/[0.03]">
-                            <Check className="w-3.5 h-3.5 text-[#D4FF00] shrink-0" />
-                            <span className="text-neutral-200">{item}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      showToast(`Координаты ${selectedLocation.name} отмечены`);
-                      setSelectedLocation(null);
-                    }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-[#D4FF00] text-black font-display font-extrabold text-xs uppercase tracking-wider cursor-pointer"
-                  >
-                    Понятно
-                  </button>
-                </div>
-              </div>
-            )}
-          </main>
-        )}
-
-        {/* ================================================================== */}
-        {/* TAB 4: НОВОСТИ И 4K ВИДЕО */}
-        {/* ================================================================== */}
-        {activeTab === 'news' && (
-          <main className="flex-1 p-4 space-y-4 animate-in fade-in duration-150">
-            <div>
-              <h1 className="text-2xl font-display font-black text-white">
-                Новости GTA VI
-              </h1>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                Официальные трейлеры, инсайды и разбор физики Вайс-Сити
-              </p>
             </div>
 
             {/* Categories */}
@@ -1801,7 +1404,11 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 5: ЧИСТЫЙ И МИНИМАЛИСТИЧНЫЙ ПРОФИЛЬ */}
+        {/* TAB 4: ЧИСТЫЙ И МИНИМАЛИСТИЧНЫЙ ПРОФИЛЬ */}
+        {/* 1) Шапка профиля: Аватар "Игрок Leonida" и статус */}
+        {/* 2) Карточка VIP Pass (рабочая) */}
+        {/* 3) Блок "Сохраненные читы" */}
+        {/* 4) Блок "Избранные новости" */}
         {/* ================================================================== */}
         {activeTab === 'profile' && (
           <main className="flex-1 p-4 space-y-5 animate-in fade-in duration-150">
@@ -1834,13 +1441,13 @@ export default function App() {
                 {deviceId && (
                   <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate flex items-center space-x-1">
                     <Cpu className="w-3 h-3 text-neutral-400 shrink-0" />
-                    <span className="truncate">Device: {deviceId.slice(0, 16)}...</span>
+                    <span className="truncate">Device ID: {deviceId.slice(0, 16)}...</span>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* 2. КАРТОЧКА VIP PASS С ПОЛЕМ ВВОДА VIP-КЛЮЧА */}
+            {/* 2. КАРТОЧКА VIP PASS */}
             <div className="rounded-3xl bg-gradient-to-br from-[#141910] via-[#10130e] to-[#0a0c09] border border-[#D4FF00]/40 p-5 space-y-4 shadow-[0_0_30px_rgba(212,255,0,0.06)] relative overflow-hidden">
               <div className="absolute -top-12 -right-12 w-40 h-40 bg-[#D4FF00]/15 rounded-full blur-3xl pointer-events-none" />
 
@@ -1860,8 +1467,8 @@ export default function App() {
                     </h3>
                     <p className="text-xs text-neutral-400 mt-0.5">
                       {isVip
-                        ? 'Пожизненный статус привязан к вашему оборудованию'
-                        : 'Мгновенная активация по ключу или через CryptoBot'}
+                        ? 'Пожизненный статус привязан к вашему устройству'
+                        : 'Эксклюзивный доступ и поддержка разработки'}
                     </p>
                   </div>
                 </div>
@@ -1871,71 +1478,19 @@ export default function App() {
                 <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3 relative z-10">
                   <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
                   <div className="text-xs text-neutral-200">
-                    <span className="font-bold text-[#D4FF00]">VIP Pass Активен:</span> Лицензия привязана к оборудованию устройства (Device ID) и сохраняется при очистке кэша Android.
+                    <span className="font-bold text-[#D4FF00]">VIP Pass Активен:</span> Лицензия привязана к оборудованию устройства (Device ID) и защищена от очистки кэша.
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4 pt-1 relative z-10">
-                  {/* ПОЛЕ ВВОДА VIP-КЛЮЧА (С ПОДДЕРЖКОЙ КЛАВИАТУРЫ ANDROID) */}
-                  <form onSubmit={handleActivateVipKey} className="space-y-2">
-                    <label className="block text-[11px] font-semibold text-neutral-300 uppercase tracking-wider flex items-center space-x-1.5">
-                      <Key className="w-3.5 h-3.5 text-[#D4FF00]" />
-                      <span>Активация по VIP-ключу</span>
-                    </label>
-
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        inputMode="text"
-                        autoCapitalize="characters"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        placeholder="Например: VIP-LEONIDA-2026"
-                        value={vipKeyInput}
-                        onChange={(e) => {
-                          setVipKeyInput(e.target.value.toUpperCase());
-                          if (vipKeyFeedback.type !== 'idle') {
-                            setVipKeyFeedback({ type: 'idle', message: '' });
-                          }
-                        }}
-                        className="flex-1 bg-black/60 border border-white/10 rounded-xl px-3 py-2 text-xs text-white uppercase font-mono placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00] transition-colors"
-                      />
-                      <button
-                        type="submit"
-                        disabled={isActivatingKey || !vipKeyInput.trim()}
-                        className="px-3.5 py-2 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] disabled:opacity-50 text-black font-display font-extrabold text-xs uppercase tracking-wider flex items-center justify-center shrink-0 transition-all cursor-pointer"
-                      >
-                        <Check className="w-3.5 h-3.5 mr-1" />
-                        <span>Ввести</span>
-                      </button>
-                    </div>
-
-                    {vipKeyFeedback.message && (
-                      <p
-                        className={`text-[11px] font-medium leading-snug ${
-                          vipKeyFeedback.type === 'success' ? 'text-emerald-400' : 'text-rose-400'
-                        }`}
-                      >
-                        {vipKeyFeedback.message}
-                      </p>
-                    )}
-                  </form>
-
-                  <div className="relative flex py-1 items-center">
-                    <div className="flex-grow border-t border-white/[0.08]" />
-                    <span className="flex-shrink mx-2 text-[10px] text-neutral-500 uppercase tracking-wider">или онлайн счет</span>
-                    <div className="flex-grow border-t border-white/[0.08]" />
-                  </div>
-
-                  {/* Кнопка создания счета Telegram @CryptoBot */}
-                  <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] flex items-center justify-between gap-3">
+                <div className="space-y-3 pt-1 relative z-10">
+                  <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <div className="text-xs font-bold text-white flex items-center space-x-1.5">
                         <Crown className="w-3.5 h-3.5 text-[#D4FF00]" />
-                        <span>Оформить через CryptoBot</span>
+                        <span>Пожизненный VIP статус</span>
                       </div>
                       <div className="text-[11px] text-neutral-400 mt-0.5">
-                        2.99 USDT • Пожизненный доступ
+                        Привязка к устройству через Secure Storage
                       </div>
                     </div>
 
@@ -1943,10 +1498,10 @@ export default function App() {
                       type="button"
                       onClick={handleInitiateVipPurchase}
                       disabled={isProcessingPayment}
-                      className="py-2 px-3.5 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/10 text-white font-display font-extrabold text-xs flex items-center justify-center space-x-1.5 transition-all shrink-0 cursor-pointer disabled:opacity-50"
+                      className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(212,255,0,0.3)] transition-all shrink-0 cursor-pointer disabled:opacity-50"
                     >
-                      <Send className="w-3.5 h-3.5 text-[#D4FF00]" />
-                      <span>{isProcessingPayment ? 'Счет...' : 'Оплатить'}</span>
+                      <Crown className="w-4 h-4 fill-black text-black" />
+                      <span>{isProcessingPayment ? 'Создание счета...' : 'Купить VIP за $2.99'}</span>
                     </button>
                   </div>
                 </div>
@@ -2113,60 +1668,49 @@ export default function App() {
         {/* ================================================================== */}
         {/* BOTTOM NAVIGATION BAR */}
         {/* ================================================================== */}
-        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#09090d]/95 backdrop-blur-xl border-t border-white/[0.08] px-2 py-2 z-40 flex items-center justify-around">
+        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#09090d]/95 backdrop-blur-xl border-t border-white/[0.08] px-4 py-2 z-40 flex items-center justify-around">
           <button
             type="button"
             onClick={() => setActiveTab('timer')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all cursor-pointer ${
               activeTab === 'timer' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Clock className="w-5 h-5 mb-1" />
-            <span className="text-[10px] font-bold">Таймер</span>
+            <span className="text-[11px] font-bold">Таймер</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('cheats')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all cursor-pointer ${
               activeTab === 'cheats' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Gamepad2 className="w-5 h-5 mb-1" />
-            <span className="text-[10px] font-bold">Читы</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('map')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'map' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            <MapPin className="w-5 h-5 mb-1" />
-            <span className="text-[10px] font-bold">Карта</span>
+            <span className="text-[11px] font-bold">Читы</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('news')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all cursor-pointer ${
               activeTab === 'news' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <Play className="w-5 h-5 mb-1" />
-            <span className="text-[10px] font-bold">Новости</span>
+            <span className="text-[11px] font-bold">Новости</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
-            className={`flex flex-col items-center py-1 px-2.5 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center py-1 px-3 rounded-xl transition-all cursor-pointer ${
               activeTab === 'profile' ? 'text-[#D4FF00]' : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
             <User className="w-5 h-5 mb-1" />
-            <span className="text-[10px] font-bold">Профиль</span>
+            <span className="text-[11px] font-bold">Профиль</span>
           </button>
         </nav>
 
@@ -2221,6 +1765,7 @@ export default function App() {
                   {activeModalNews.title}
                 </h2>
 
+                {/* Video Player */}
                 <div className="space-y-2">
                   <div className="relative rounded-2xl overflow-hidden aspect-video bg-black border border-white/10 shadow-lg">
                     {isVideoPlaying ? (
@@ -2237,7 +1782,7 @@ export default function App() {
                         className="relative w-full h-full cursor-pointer flex flex-col justify-between group"
                       >
                         <img
-                          src={news_img_safe(activeModalNews.image)}
+                          src={activeModalNews.image}
                           alt={activeModalNews.title}
                           className="w-full h-full object-cover absolute inset-0 opacity-80 group-hover:scale-105 transition-transform duration-300"
                         />
@@ -2270,12 +1815,14 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Content Paragraphs */}
                 <div className="space-y-3 text-sm text-neutral-300 leading-relaxed">
                   {activeModalNews.content.map((p, idx) => (
                     <p key={idx}>{p}</p>
                   ))}
                 </div>
 
+                {/* Key Facts */}
                 {activeModalNews.keyFacts && activeModalNews.keyFacts.length > 0 && (
                   <div className="rounded-2xl bg-[#121217] border border-white/[0.08] p-4 space-y-2">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-[#D4FF00]">
@@ -2356,6 +1903,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Action Buttons */}
               <div className="space-y-2 pt-1">
                 <button
                   type="button"
@@ -2403,9 +1951,4 @@ export default function App() {
       </div>
     </div>
   );
-}
-
-function news_img_safe(url: string): string {
-  if (!url) return 'https://img.youtube.com/vi/QdBZY2fkU-0/maxresdefault.jpg';
-  return url;
 }
