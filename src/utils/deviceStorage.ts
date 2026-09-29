@@ -92,10 +92,11 @@ export async function loadDeviceStorageData(): Promise<{
   };
 
   try {
-    const [cheatsRes, newsRes, vipRes, profileRes] = await Promise.all([
+    const [cheatsRes, newsRes, vipRes, vipActiveRes, profileRes] = await Promise.all([
       Preferences.get({ key: getKey(deviceId, 'fav_cheats') }),
       Preferences.get({ key: getKey(deviceId, 'fav_news') }),
       Preferences.get({ key: getKey(deviceId, 'is_vip') }),
+      Preferences.get({ key: 'vip_active' }),
       Preferences.get({ key: getKey(deviceId, 'profile') })
     ]);
 
@@ -113,7 +114,7 @@ export async function loadDeviceStorageData(): Promise<{
       } catch {}
     }
 
-    if (vipRes.value === 'true') {
+    if (vipRes.value === 'true' || vipActiveRes.value === 'true') {
       isVip = true;
     }
 
@@ -124,7 +125,7 @@ export async function loadDeviceStorageData(): Promise<{
           profile = {
             displayName: parsed.displayName || 'Игрок Leonida',
             avatarUrl: parsed.avatarUrl || DEFAULT_AVATAR,
-            statusText: parsed.statusText || (isVip ? 'Пожизненный Leonida VIP Pass' : 'Игрок Leonida'),
+            statusText: parsed.statusText || (isVip ? 'VIP Игрок ⚡' : 'Игрок Leonida'),
             isVip: Boolean(parsed.isVip || isVip),
             vipInvoiceId: parsed.vipInvoiceId,
             vipVerifiedAt: parsed.vipVerifiedAt,
@@ -136,9 +137,9 @@ export async function loadDeviceStorageData(): Promise<{
       } catch {}
     }
 
-    if (isVip && !profile.isVip) {
+    if (isVip && (!profile.isVip || profile.statusText !== 'VIP Игрок ⚡')) {
       profile.isVip = true;
-      profile.statusText = 'Пожизненный Leonida VIP Pass';
+      profile.statusText = 'VIP Игрок ⚡';
     }
   } catch (err) {
     console.warn('Error reading device preferences:', err);
@@ -187,6 +188,10 @@ export async function saveVipStatus(
     key: getKey(deviceId, 'is_vip'),
     value: isVip ? 'true' : 'false'
   });
+  await Preferences.set({
+    key: 'vip_active',
+    value: isVip ? 'true' : 'false'
+  });
 
   if (invoiceDetails) {
     await Preferences.set({
@@ -200,7 +205,7 @@ export async function saveVipStatus(
   let profileObj: DeviceProfile = {
     displayName: 'Игрок Leonida',
     avatarUrl: DEFAULT_AVATAR,
-    statusText: isVip ? 'Пожизненный Leonida VIP Pass' : 'Игрок Leonida',
+    statusText: isVip ? 'VIP Игрок ⚡' : 'Игрок Leonida',
     isVip
   };
 
@@ -211,7 +216,7 @@ export async function saveVipStatus(
   }
 
   profileObj.isVip = isVip;
-  profileObj.statusText = isVip ? 'Пожизненный Leonida VIP Pass' : 'Игрок Leonida';
+  profileObj.statusText = isVip ? 'VIP Игрок ⚡' : 'Игрок Leonida';
   if (invoiceDetails) {
     profileObj.vipInvoiceId = invoiceDetails.invoiceId;
     profileObj.vipAmount = invoiceDetails.amount;
@@ -250,6 +255,47 @@ export async function getCachedNews<T>(): Promise<T[] | null> {
     }
   } catch (err) {
     console.warn('Error reading cached news feed:', err);
+  }
+  return null;
+}
+
+export interface PendingVipOrder {
+  invoiceId: number;
+  amount: string;
+  asset: string;
+  payUrl: string;
+  status: 'created' | 'checking' | 'unpaid';
+  lastCheckedAt?: string;
+  createdAt: string;
+}
+
+export async function savePendingVipOrder(order: PendingVipOrder | null): Promise<void> {
+  try {
+    if (!order) {
+      await Preferences.remove({ key: 'gta6_pending_vip_order' });
+      try { localStorage.removeItem('gta6_pending_vip_order'); } catch {}
+    } else {
+      const serialized = JSON.stringify(order);
+      await Preferences.set({ key: 'gta6_pending_vip_order', value: serialized });
+      try { localStorage.setItem('gta6_pending_vip_order', serialized); } catch {}
+    }
+  } catch (err) {
+    console.warn('Error saving pending VIP order:', err);
+  }
+}
+
+export async function getPendingVipOrder(): Promise<PendingVipOrder | null> {
+  try {
+    const { value } = await Preferences.get({ key: 'gta6_pending_vip_order' });
+    if (value) {
+      return JSON.parse(value);
+    }
+    try {
+      const local = localStorage.getItem('gta6_pending_vip_order');
+      if (local) return JSON.parse(local);
+    } catch {}
+  } catch (err) {
+    console.warn('Error reading pending VIP order:', err);
   }
   return null;
 }
@@ -293,4 +339,5 @@ export async function saveLastNewsSync(timestamp: string): Promise<void> {
     // ignore
   }
 }
+
 

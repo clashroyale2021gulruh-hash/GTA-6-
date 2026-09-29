@@ -144,6 +144,85 @@ async function startServer() {
     }
   });
 
+  // Persistent VIP registry for verified transactions
+  const verifiedVipRegistry = new Map<string, {
+    invoiceId: number;
+    amount: string;
+    asset: string;
+    verifiedAt: string;
+  }>();
+
+  app.get('/api/vip/status', (req, res) => {
+    const queryId = String(req.query.id || req.query.userId || req.query.deviceId || '').trim();
+    if (!queryId) {
+      res.json({ ok: true, isVip: false });
+      return;
+    }
+    const record = verifiedVipRegistry.get(queryId);
+    if (record) {
+      res.json({ ok: true, isVip: true, vipActive: true, record });
+    } else {
+      res.json({ ok: true, isVip: false });
+    }
+  });
+
+  app.post('/api/vip/activate', async (req, res) => {
+    try {
+      const { invoice_id, userId, deviceId } = req.body || {};
+      if (!invoice_id) {
+        res.status(400).json({ ok: false, error: 'invoice_id обязателен' });
+        return;
+      }
+
+      // Query Crypto Pay to confirm payment status
+      const response = await fetch(`${CRYPTO_PAY_BASE_URL}/getInvoices?invoice_ids=${invoice_id}`, {
+        method: 'GET',
+        headers: {
+          'Crypto-Pay-API-TOKEN': PRODUCTION_CRYPTOBOT_TOKEN
+        }
+      });
+      const data = await response.json();
+
+      let isPaid = false;
+      let paidItem: any = null;
+      if (data?.ok && Array.isArray(data.result?.items) && data.result.items.length > 0) {
+        paidItem = data.result.items[0];
+        if (paidItem.status === 'paid') {
+          isPaid = true;
+        }
+      }
+
+      if (isPaid && paidItem) {
+        const record = {
+          invoiceId: paidItem.invoice_id,
+          amount: paidItem.amount,
+          asset: paidItem.asset,
+          verifiedAt: new Date().toISOString()
+        };
+        if (userId) verifiedVipRegistry.set(String(userId), record);
+        if (deviceId) verifiedVipRegistry.set(String(deviceId), record);
+
+        res.json({
+          ok: true,
+          isPaid: true,
+          vipActive: true,
+          message: 'Оплата подтверждена Crypto Pay. VIP статус активирован!',
+          record
+        });
+      } else {
+        res.json({
+          ok: true,
+          isPaid: false,
+          vipActive: false,
+          message: 'Счет еще не оплачен в Crypto Pay',
+          status: paidItem?.status || 'active'
+        });
+      }
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'Ошибка активации VIP' });
+    }
+  });
+
   // Vite middleware in development vs static serving in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

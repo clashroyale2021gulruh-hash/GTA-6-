@@ -294,6 +294,71 @@ async function startServer() {
       });
     }
   });
+  const verifiedVipRegistry = /* @__PURE__ */ new Map();
+  app.get("/api/vip/status", (req, res) => {
+    const queryId = String(req.query.id || req.query.userId || req.query.deviceId || "").trim();
+    if (!queryId) {
+      res.json({ ok: true, isVip: false });
+      return;
+    }
+    const record = verifiedVipRegistry.get(queryId);
+    if (record) {
+      res.json({ ok: true, isVip: true, vipActive: true, record });
+    } else {
+      res.json({ ok: true, isVip: false });
+    }
+  });
+  app.post("/api/vip/activate", async (req, res) => {
+    try {
+      const { invoice_id, userId, deviceId } = req.body || {};
+      if (!invoice_id) {
+        res.status(400).json({ ok: false, error: "invoice_id \u043E\u0431\u044F\u0437\u0430\u0442\u0435\u043B\u0435\u043D" });
+        return;
+      }
+      const response = await fetch(`${CRYPTO_PAY_BASE_URL}/getInvoices?invoice_ids=${invoice_id}`, {
+        method: "GET",
+        headers: {
+          "Crypto-Pay-API-TOKEN": PRODUCTION_CRYPTOBOT_TOKEN
+        }
+      });
+      const data = await response.json();
+      let isPaid = false;
+      let paidItem = null;
+      if (data?.ok && Array.isArray(data.result?.items) && data.result.items.length > 0) {
+        paidItem = data.result.items[0];
+        if (paidItem.status === "paid") {
+          isPaid = true;
+        }
+      }
+      if (isPaid && paidItem) {
+        const record = {
+          invoiceId: paidItem.invoice_id,
+          amount: paidItem.amount,
+          asset: paidItem.asset,
+          verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        if (userId) verifiedVipRegistry.set(String(userId), record);
+        if (deviceId) verifiedVipRegistry.set(String(deviceId), record);
+        res.json({
+          ok: true,
+          isPaid: true,
+          vipActive: true,
+          message: "\u041E\u043F\u043B\u0430\u0442\u0430 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0430 Crypto Pay. VIP \u0441\u0442\u0430\u0442\u0443\u0441 \u0430\u043A\u0442\u0438\u0432\u0438\u0440\u043E\u0432\u0430\u043D!",
+          record
+        });
+      } else {
+        res.json({
+          ok: true,
+          isPaid: false,
+          vipActive: false,
+          message: "\u0421\u0447\u0435\u0442 \u0435\u0449\u0435 \u043D\u0435 \u043E\u043F\u043B\u0430\u0447\u0435\u043D \u0432 Crypto Pay",
+          status: paidItem?.status || "active"
+        });
+      }
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || "\u041E\u0448\u0438\u0431\u043A\u0430 \u0430\u043A\u0442\u0438\u0432\u0430\u0446\u0438\u0438 VIP" });
+    }
+  });
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
       server: { middlewareMode: true },

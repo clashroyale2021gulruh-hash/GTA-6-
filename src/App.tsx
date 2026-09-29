@@ -27,7 +27,14 @@ import {
   Flame,
   Sparkles,
   Star,
-  Cpu
+  Cpu,
+  LogIn,
+  LogOut,
+  UserPlus,
+  Lock,
+  Mail,
+  Cloud,
+  Key
 } from 'lucide-react';
 import {
   getHardwareDeviceId,
@@ -41,10 +48,26 @@ import {
   getLastNewsSync,
   saveLastNewsSync,
   DEFAULT_AVATAR,
-  DeviceProfile
+  DeviceProfile,
+  PendingVipOrder,
+  savePendingVipOrder,
+  getPendingVipOrder
 } from './utils/deviceStorage';
+import { App as CapApp } from '@capacitor/app';
+import { supabase, checkSupabaseVipStatus, syncDeviceToSupabase } from './utils/supabaseClient';
 import { safeFetchJson, openExternalUrl } from './utils/api';
 import { INITIAL_GTA_NEWS } from './data/newsFeed';
+import {
+  loginWithEmail,
+  registerWithEmail,
+  loginAsGuest,
+  logoutUser,
+  getUserCloudData,
+  saveUserCloudData,
+  auth,
+  onAuthStateChanged,
+  User as FirebaseUser
+} from './utils/authService';
 
 // ============================================================================
 // TYPES & DATA STRUCTURES
@@ -366,6 +389,20 @@ export default function App() {
   const [favoriteCheats, setFavoriteCheats] = useState<string[]>([]);
   const [favoriteNews, setFavoriteNews] = useState<string[]>([]);
 
+  // Supabase Auth State
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState<string>('');
+  const [authPassword, setAuthPassword] = useState<string>('');
+  const [authDisplayName, setAuthDisplayName] = useState<string>('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthProcessing, setIsAuthProcessing] = useState<boolean>(false);
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
+
+  // Supabase VIP Cloud Verification State
+  const [isCheckingSupabaseVip, setIsCheckingSupabaseVip] = useState<boolean>(false);
+
   // UI Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -383,6 +420,7 @@ export default function App() {
   const [hasCopiedInvoiceUrl, setHasCopiedInvoiceUrl] = useState<boolean>(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
   const [isCheckingInvoice, setIsCheckingInvoice] = useState<boolean>(false);
+  const [pendingOrder, setPendingOrder] = useState<PendingVipOrder | null>(null);
   const [invoiceFeedback, setInvoiceFeedback] = useState<{
     status: 'idle' | 'checking' | 'unpaid' | 'paid' | 'error';
     message: string;
@@ -441,12 +479,33 @@ export default function App() {
 
   useEffect(() => {
     // 1) Load hardware-linked data from @capacitor/preferences
-    loadDeviceStorageData().then((data) => {
+    loadDeviceStorageData().then(async (data) => {
       setDeviceId(data.deviceId);
       setFavoriteCheats(data.favCheats);
       setFavoriteNews(data.favNews);
       setIsVip(data.isVip);
       setUserProfile(data.profile);
+
+      // Check VIP status in Supabase profiles/users table with timeout handling (offline-safe)
+      try {
+        const supaRes = await checkSupabaseVipStatus(data.deviceId, 4000);
+        if (supaRes.isVip) {
+          setIsVip(true);
+          setUserProfile((prev) => ({
+            ...prev,
+            isVip: true,
+            statusText: 'VIP Игрок ⚡'
+          }));
+          await saveVipStatus(true, {
+            invoiceId: supaRes.rawData?.invoice_id || Math.floor(Date.now() / 1000),
+            amount: '2.99',
+            asset: 'SUPABASE_CLOUD',
+            verifiedAt: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase initial VIP check handled offline:', err);
+      }
     });
 
     // 2) Load cached news from preferences for instant render
@@ -465,9 +524,95 @@ export default function App() {
       setIsReminderSet(reminderVal);
     } catch {}
 
+    // Load any pending order for the visual indicator
+    getPendingVipOrder().then((saved) => {
+      if (saved) {
+        setPendingOrder(saved);
+      }
+    });
+
     // 3) Automatic silent fetch on every app startup without blocking UI
     syncNewsFromNetwork(false);
+
+    // 4) Background listener for Firebase Auth and cloud user sync
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        try {
+          const cloudData = await getUserCloudData(user.uid);
+          if (cloudData) {
+            if (cloudData.isVip) {
+              setIsVip(true);
+              await saveVipStatus(true, {
+                invoiceId: cloudData.vipInvoiceId || 0,
+                amount: cloudData.vipAmount || '2.99',
+                asset: cloudData.vipAsset || 'USDT',
+                verifiedAt: cloudData.vipVerifiedAt
+              });
+            } else {
+              const currentVipState = await loadDeviceStorageData();
+              if (currentVipState.isVip) {
+                await saveUserCloudData(user.uid, {
+                  isVip: true,
+                  vipAmount: '2.99',
+                  vipAsset: 'USDT'
+                });
+              }
+            }
+
+            if (Array.isArray(cloudData.savedCheats) && cloudData.savedCheats.length > 0) {
+              setFavoriteCheats((prev) => Array.from(new Set([...prev, ...cloudData.savedCheats!])));
+            }
+            if (Array.isArray(cloudData.savedNews) && cloudData.savedNews.length > 0) {
+              setFavoriteNews((prev) => Array.from(new Set([...prev, ...cloudData.savedNews!])));
+            }
+          }
+        } catch (err) {
+          console.warn('Auth sync notice:', err);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribeAuth();
+    };
   }, []);
+
+  // RuStore & Android Native Back Button Support
+  useEffect(() => {
+    let backListener: any = null;
+    try {
+      CapApp.addListener('backButton', () => {
+        if (activeInvoice) {
+          setActiveInvoice(null);
+          return;
+        }
+        if (activeModalNews) {
+          setActiveModalNews(null);
+          return;
+        }
+        if (isAuthModalOpen) {
+          setIsAuthModalOpen(false);
+          return;
+        }
+        if (activeTab !== 'cheats') {
+          setActiveTab('cheats');
+          return;
+        }
+        CapApp.exitApp();
+      }).then((handle) => {
+        backListener = handle;
+      });
+    } catch {
+      // non-Capacitor environment
+    }
+
+    return () => {
+      if (backListener && typeof backListener.remove === 'function') {
+        backListener.remove();
+      }
+    };
+  }, [activeInvoice, activeModalNews, isAuthModalOpen, activeTab]);
 
   // ==========================================================================
   // COUNTDOWN TIMER ENGINE
@@ -567,78 +712,224 @@ export default function App() {
   };
 
   // ==========================================================================
-  // VIP PASS: REAL CRYPTOBOT INTEGRATION & DEVICE LOCK ACTIVATION
+  // SUPABASE AUTHENTICATION HANDLERS
+  // ==========================================================================
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError('Заполните Email и пароль');
+      return;
+    }
+
+    if (authPassword.length < 6) {
+      setAuthError('Пароль должен содержать не менее 6 символов');
+      return;
+    }
+
+    setIsAuthProcessing(true);
+    try {
+      if (authMode === 'login') {
+        const user = await loginWithEmail(authEmail, authPassword);
+        setCurrentUser(user);
+        setUserProfile((prev) => ({
+          ...prev,
+          displayName: user.displayName || prev.displayName
+        }));
+        showToast(`С возвращением, ${user.displayName || 'Игрок'}!`);
+      } else {
+        const user = await registerWithEmail(authEmail, authPassword, authDisplayName);
+        setCurrentUser(user);
+        setUserProfile((prev) => ({
+          ...prev,
+          displayName: user.displayName || prev.displayName
+        }));
+        showToast('Регистрация в Supabase успешна!');
+      }
+
+      setIsAuthModalOpen(false);
+      setAuthEmail('');
+      setAuthPassword('');
+      setAuthDisplayName('');
+    } catch (err: any) {
+      setAuthError(err?.message || 'Ошибка авторизации. Проверьте данные.');
+    } finally {
+      setIsAuthProcessing(false);
+    }
+  };
+
+  const handleGuestSignIn = async () => {
+    setAuthError(null);
+    setIsAuthProcessing(true);
+    try {
+      const user = await loginAsGuest();
+      setCurrentUser(user);
+      setIsAuthModalOpen(false);
+      showToast('Вход в гостевом режиме выполнен');
+    } catch (err: any) {
+      setAuthError(err?.message || 'Не удалось выполнить гостевой вход');
+    } finally {
+      setIsAuthProcessing(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await logoutUser();
+      setCurrentUser(null);
+      showToast('Вы вышли из профиля');
+    } catch {
+      showToast('Ошибка при выходе');
+    }
+  };
+
+  // ==========================================================================
+  // VIP PASS: DIRECT CRYPTO PAY API INVOICING & SUPABASE CLOUD VALIDATION
   // ==========================================================================
 
   const handleInitiateVipPurchase = async () => {
     setIsProcessingPayment(true);
-    setInvoiceFeedback({
-      status: 'idle',
-      message: 'Создание счета в @CryptoBot...'
-    });
-    showToast('Создание счета в @CryptoBot (2.99 USDT)...');
-
-    const safePayload = deviceId || (await getHardwareDeviceId());
-
     try {
-      const res = await safeFetchJson('/api/cryptobot/createInvoice', {
+      let currentDeviceId = deviceId;
+      if (!currentDeviceId) {
+        currentDeviceId = await getHardwareDeviceId();
+        setDeviceId(currentDeviceId);
+      }
+
+      const activeUserId = currentUser?.id || currentUser?.uid || currentDeviceId;
+
+      showToast('Формируем прямой счет в Crypto Pay...');
+      const res = await safeFetchJson<{
+        ok: boolean;
+        result?: CryptoInvoice;
+        error?: any;
+      }>('/api/cryptobot/createInvoice', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({
           asset: 'USDT',
           amount: '2.99',
           description: 'GTA 6 Leonida - Пожизненный VIP Pass',
-          payload: safePayload
+          payload: JSON.stringify({
+            userId: activeUserId,
+            deviceId: currentDeviceId
+          })
         })
       });
 
-      if (res.ok && res.data && res.data.ok === true && res.data.result?.pay_url) {
-        showToast('Счет создан! Открыто окно оплаты');
-        setActiveInvoice(res.data.result);
-        setInvoiceFeedback({
-          status: 'idle',
-          message: `Счет #${res.data.result.invoice_id} на 2.99 USDT создан в @CryptoBot. Перейдите по ссылке ниже для оплаты.`
-        });
-        openExternalUrl(res.data.result.pay_url);
-      } else {
-        // Direct bot deeplink fallback
-        const directBotUrl = `https://t.me/CryptoBot?start=VIP_GTA6_${safePayload}`;
-        const fallbackInvoice: CryptoInvoice = {
-          invoice_id: Math.floor(Date.now() / 1000),
-          currency_type: 'crypto',
-          asset: 'USDT',
-          amount: '2.99',
-          pay_url: directBotUrl,
-          bot_invoice_url: directBotUrl,
-          description: 'GTA 6 Leonida - Пожизненный VIP Pass',
-          status: 'active',
-          created_at: new Date().toISOString()
+      if (res.ok && res.data?.result) {
+        const inv = res.data.result;
+        setActiveInvoice(inv);
+        const orderData: PendingVipOrder = {
+          invoiceId: inv.invoice_id,
+          amount: inv.amount,
+          asset: inv.asset,
+          payUrl: inv.bot_invoice_url || inv.pay_url,
+          status: 'created',
+          createdAt: new Date().toISOString()
         };
-        setActiveInvoice(fallbackInvoice);
+        setPendingOrder(orderData);
+        await savePendingVipOrder(orderData);
+
         setInvoiceFeedback({
           status: 'idle',
-          message: 'Прямой шлюз Telegram @CryptoBot открыт. Нажмите кнопку ниже для завершения оплаты.'
+          message: 'Счет на 2.99 USDT сформирован. Оплатите через шлюз Crypto Pay.'
         });
-        showToast('Счет открыт! Переход в Telegram @CryptoBot...');
-        openExternalUrl(directBotUrl);
+        showToast('Счет в Crypto Pay успешно создан!');
+
+        // Direct payment redirect to Crypto Pay gateway
+        const payLink = inv.bot_invoice_url || inv.pay_url;
+        if (payLink) {
+          openExternalUrl(payLink);
+        }
+      } else {
+        showToast('Не удалось сформировать счет в Crypto Pay');
       }
     } catch {
-      const directBotUrl = `https://t.me/CryptoBot?start=VIP_GTA6_${safePayload}`;
-      const fallbackInvoice: CryptoInvoice = {
-        invoice_id: Math.floor(Date.now() / 1000),
-        currency_type: 'crypto',
-        asset: 'USDT',
-        amount: '2.99',
-        pay_url: directBotUrl,
-        bot_invoice_url: directBotUrl,
-        description: 'GTA 6 Leonida - Пожизненный VIP Pass',
-        status: 'active',
-        created_at: new Date().toISOString()
-      };
-      setActiveInvoice(fallbackInvoice);
-      openExternalUrl(directBotUrl);
+      showToast('Ошибка обращения к шлюзу Crypto Pay');
     } finally {
       setIsProcessingPayment(false);
+    }
+  };
+
+  const handleCopyDeviceId = async () => {
+    try {
+      const currentDeviceId = deviceId || (await getHardwareDeviceId());
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(currentDeviceId);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = currentDeviceId;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      showToast('Device ID скопирован в буфер!');
+    } catch {
+      showToast('Не удалось скопировать Device ID');
+    }
+  };
+
+  const handleCheckSupabaseVip = async (isManual = true) => {
+    if (isManual) setIsCheckingSupabaseVip(true);
+    try {
+      const currentDeviceId = deviceId || (await getHardwareDeviceId());
+      const queryId = currentUser?.id || currentUser?.uid || currentDeviceId;
+      const res = await checkSupabaseVipStatus(queryId, 5000);
+
+      if (res.isVip) {
+        setIsVip(true);
+        const updatedProfile: DeviceProfile = {
+          ...userProfile,
+          isVip: true,
+          statusText: 'VIP Игрок ⚡',
+          vipVerifiedAt: new Date().toISOString()
+        };
+        setUserProfile(updatedProfile);
+
+        // Save in @capacitor/preferences
+        await saveVipStatus(true, {
+          invoiceId: res.rawData?.vip_invoice_id || res.rawData?.invoice_id || Math.floor(Date.now() / 1000),
+          amount: '2.99',
+          asset: 'CRYPTO_PAY',
+          verifiedAt: new Date().toISOString()
+        });
+        await saveDeviceProfile(updatedProfile);
+
+        const targetUid = currentUser?.id || currentUser?.uid;
+        if (targetUid) {
+          await saveUserCloudData(targetUid, {
+            isVip: true,
+            vipAmount: '2.99',
+            vipAsset: 'CRYPTO_PAY'
+          });
+        }
+
+        if (isManual) {
+          showToast('VIP статус успешно подтвержден в Supabase! ⚡');
+        }
+      } else if (isManual) {
+        if (res.source === 'offline_timeout') {
+          showToast('Таймаут соединения с Supabase (нет интернета)');
+        } else {
+          showToast('Активная подписка не найдена в базе данных Supabase');
+        }
+      }
+    } catch {
+      if (isManual) {
+        showToast('Не удалось проверить статус в Supabase');
+      }
+    } finally {
+      if (isManual) {
+        setIsCheckingSupabaseVip(false);
+      }
     }
   };
 
@@ -665,22 +956,47 @@ export default function App() {
     });
 
     try {
-      const res = await safeFetchJson(`/api/cryptobot/getInvoices?invoice_ids=${activeInvoice.invoice_id}`);
-      let isPaid = false;
+      const targetUserId = currentUser?.id || currentUser?.uid;
 
-      if (res.ok && res.data?.ok && Array.isArray(res.data.result?.items) && res.data.result.items.length > 0) {
-        const item = res.data.result.items[0];
-        if (item.status === 'paid') {
-          isPaid = true;
+      // 1. Check via server activation endpoint
+      let isPaid = false;
+      const verifyRes = await safeFetchJson<{
+        ok: boolean;
+        isPaid?: boolean;
+        message?: string;
+        record?: any;
+      }>('/api/vip/activate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          invoice_id: activeInvoice.invoice_id,
+          userId: targetUserId,
+          deviceId
+        })
+      });
+
+      if (verifyRes.ok && verifyRes.data?.isPaid) {
+        isPaid = true;
+      } else {
+        // Fallback: direct check of Crypto Pay invoices
+        const res = await safeFetchJson(`/api/cryptobot/getInvoices?invoice_ids=${activeInvoice.invoice_id}`);
+        if (res.ok && res.data?.ok && Array.isArray(res.data.result?.items) && res.data.result.items.length > 0) {
+          const item = res.data.result.items[0];
+          if (item.status === 'paid') {
+            isPaid = true;
+          }
         }
       }
 
       if (isPaid) {
+        // 1. Immediate UI unlock
         setIsVip(true);
         const updatedProfile: DeviceProfile = {
           ...userProfile,
           isVip: true,
-          statusText: 'Пожизненный Leonida VIP Pass',
+          statusText: 'VIP Игрок ⚡',
           vipInvoiceId: activeInvoice.invoice_id,
           vipAmount: activeInvoice.amount,
           vipAsset: activeInvoice.asset,
@@ -688,26 +1004,68 @@ export default function App() {
         };
         setUserProfile(updatedProfile);
 
-        // Save in Secure Storage with Device Lock
+        // 2. Persistent storage in Capacitor Preferences + localStorage
         await saveVipStatus(true, {
           invoiceId: activeInvoice.invoice_id,
           amount: activeInvoice.amount,
           asset: activeInvoice.asset,
           verifiedAt: new Date().toISOString()
         });
+        await saveDeviceProfile(updatedProfile);
+
+        // 3. Supabase Cloud Sync (Auth user_metadata + profiles table)
+        const cloudUserId = targetUserId || deviceId;
+        try {
+          await saveUserCloudData(cloudUserId, {
+            isVip: true,
+            vipInvoiceId: activeInvoice.invoice_id,
+            vipAmount: activeInvoice.amount,
+            vipAsset: activeInvoice.asset,
+            vipVerifiedAt: new Date().toISOString()
+          });
+        } catch (err) {
+          console.warn('saveUserCloudData error:', err);
+        }
+
+        try {
+          await supabase.auth.updateUser({
+            data: {
+              is_vip: true,
+              vip_active: true,
+              vip_invoice_id: activeInvoice.invoice_id,
+              vip_amount: activeInvoice.amount,
+              vip_asset: activeInvoice.asset,
+              vip_verified_at: new Date().toISOString()
+            }
+          });
+        } catch {
+          // ignore
+        }
 
         setInvoiceFeedback({
           status: 'paid',
-          message: 'Транзакция 2.99 USDT подтверждена! Пожизненный VIP Pass активирован.'
+          message: 'Транзакция 2.99 USDT подтверждена! Пожизненный VIP Pass успешно активирован.'
         });
         showToast('Оплата подтверждена! Пожизненный VIP Pass активирован!');
-        setTimeout(() => setActiveInvoice(null), 2000);
+        setPendingOrder(null);
+        await savePendingVipOrder(null);
+        setTimeout(() => setActiveInvoice(null), 2500);
       } else {
+        const timeNow = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        if (pendingOrder) {
+          const updated: PendingVipOrder = {
+            ...pendingOrder,
+            status: 'unpaid',
+            lastCheckedAt: timeNow
+          };
+          setPendingOrder(updated);
+          await savePendingVipOrder(updated);
+        }
         setInvoiceFeedback({
           status: 'unpaid',
-          message: `Оплата не поступила! Перейдите в бота Telegram @CryptoBot и завершите перевод 2.99 USDT.`
+          message: `Оплата не поступила! Завершите перевод 2.99 USDT через шлюз Crypto Pay.`
         });
-        showToast('Оплата пока не обнаружена в CryptoBot');
+        showToast('Оплата пока не обнаружена в Crypto Pay');
       }
     } catch {
       setInvoiceFeedback({
@@ -719,6 +1077,113 @@ export default function App() {
       setIsCheckingInvoice(false);
     }
   };
+
+  // Profile Action: Verify status of pending order directly
+  const handleCheckPendingOrder = async () => {
+    if (!pendingOrder) return;
+    setIsCheckingInvoice(true);
+    setPendingOrder((prev) => (prev ? { ...prev, status: 'checking' } : null));
+
+    try {
+      const targetUserId = currentUser?.id || currentUser?.uid;
+      const verifyRes = await safeFetchJson<{
+        ok: boolean;
+        isPaid?: boolean;
+        message?: string;
+        record?: any;
+      }>('/api/vip/activate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          invoice_id: pendingOrder.invoiceId,
+          userId: targetUserId,
+          deviceId
+        })
+      });
+
+      let isPaid = false;
+      if (verifyRes.ok && verifyRes.data?.isPaid) {
+        isPaid = true;
+      } else {
+        const res = await safeFetchJson(`/api/cryptobot/getInvoices?invoice_ids=${pendingOrder.invoiceId}`);
+        if (res.ok && res.data?.ok && Array.isArray(res.data.result?.items) && res.data.result.items.length > 0) {
+          if (res.data.result.items[0].status === 'paid') {
+            isPaid = true;
+          }
+        }
+      }
+
+      if (isPaid) {
+        setIsVip(true);
+        const updatedProfile: DeviceProfile = {
+          ...userProfile,
+          isVip: true,
+          statusText: 'VIP Игрок ⚡',
+          vipInvoiceId: pendingOrder.invoiceId,
+          vipAmount: pendingOrder.amount,
+          vipAsset: pendingOrder.asset,
+          vipVerifiedAt: new Date().toISOString()
+        };
+        setUserProfile(updatedProfile);
+
+        await saveVipStatus(true, {
+          invoiceId: pendingOrder.invoiceId,
+          amount: pendingOrder.amount,
+          asset: pendingOrder.asset,
+          verifiedAt: new Date().toISOString()
+        });
+        await saveDeviceProfile(updatedProfile);
+        await savePendingVipOrder(null);
+        setPendingOrder(null);
+        showToast('Оплата подтверждена! Пожизненный VIP Pass активирован!');
+      } else {
+        const timeNow = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const updated: PendingVipOrder = {
+          ...pendingOrder,
+          status: 'unpaid',
+          lastCheckedAt: timeNow
+        };
+        setPendingOrder(updated);
+        await savePendingVipOrder(updated);
+        showToast(`Платеж не найден (${timeNow}). Подождите подтверждения сети.`);
+      }
+    } catch {
+      showToast('Ошибка при проверке счета');
+    } finally {
+      setIsCheckingInvoice(false);
+    }
+  };
+
+  const handleCancelPendingOrder = async () => {
+    setPendingOrder(null);
+    await savePendingVipOrder(null);
+    showToast('Счет сброшен. Вы можете сформировать новый.');
+  };
+
+  // Automatic live polling for payment confirmation (for open modal OR pending profile order)
+  useEffect(() => {
+    const targetInvoiceId = activeInvoice?.invoice_id || pendingOrder?.invoiceId;
+    if (!targetInvoiceId || isVip) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await safeFetchJson<{
+          ok: boolean;
+          result?: { items?: Array<{ status: string }> };
+        }>(`/api/cryptobot/getInvoices?invoice_ids=${targetInvoiceId}`);
+
+        if (res.ok && res.data?.result?.items?.[0]?.status === 'paid') {
+          handleVerifyAndActivateInvoice();
+        }
+      } catch {
+        // silent polling catch
+      }
+    }, 4500);
+
+    return () => clearInterval(interval);
+  }, [activeInvoice?.invoice_id, pendingOrder?.invoiceId, isVip]);
 
   // ==========================================================================
   // GAMEPAD GLYPH RENDERER
@@ -1005,7 +1470,7 @@ export default function App() {
                   <ChevronRight className="w-4 h-4 text-neutral-400" />
                 </div>
                 <p className="text-[11px] text-neutral-400">
-                  Все коды открыты
+                  {isVip ? 'Все коды открыты' : 'Только в Leonida VIP'}
                 </p>
               </button>
 
@@ -1030,18 +1495,58 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* TAB 2: ЧИТ-КОДЫ (ВСЕ ЧИТЫ ОТКРЫТЫ И ДОСТУПНЫ) */}
+        {/* TAB 2: ЧИТ-КОДЫ (ОТКРЫТЫ ТОЛЬКО ПОСЛЕ VIP) */}
         {/* ================================================================== */}
         {activeTab === 'cheats' && (
           <main className="flex-1 p-4 space-y-4 animate-in fade-in duration-150">
             <div>
-              <h1 className="text-2xl font-display font-black text-white">
-                Чит-коды GTA VI
-              </h1>
+              <div className="flex items-center space-x-2">
+                <h1 className="text-2xl font-display font-black text-white">
+                  Чит-коды GTA VI
+                </h1>
+                {isVip && (
+                  <span className="text-[10px] font-extrabold uppercase bg-[#D4FF00] text-black px-2.5 py-0.5 rounded-full shadow-[0_0_10px_rgba(212,255,0,0.3)]">
+                    VIP Открыто
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-neutral-400 mt-0.5">
-                Все стандартные читы полностью доступны без ограничений
+                {isVip
+                  ? 'Все читы разблокированы в вашем Leonida VIP Pass'
+                  : 'Читы заблокированы и видны только владельцам Leonida VIP Pass'}
               </p>
             </div>
+
+            {/* VIP Lock Banner when not VIP */}
+            {!isVip && (
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-[#161a10] to-[#0e100c] border border-[#D4FF00]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_0_25px_rgba(212,255,0,0.1)] relative overflow-hidden">
+                <div className="flex items-center space-x-3 relative z-10">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-[0_0_15px_rgba(212,255,0,0.35)] shrink-0">
+                    <Lock className="w-5 h-5 text-black" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-display font-black text-white flex items-center space-x-2">
+                      <span>Доступ закрыт</span>
+                      <span className="text-[10px] bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40 px-2 py-0.5 rounded-full font-bold">
+                        Требуется VIP
+                      </span>
+                    </h3>
+                    <p className="text-xs text-neutral-400 mt-0.5">
+                      Чит-коды видны только после активации Leonida VIP Pass
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleInitiateVipPurchase}
+                  className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_20px_rgba(212,255,0,0.35)] transition-all shrink-0 cursor-pointer relative z-10"
+                >
+                  <Crown className="w-4 h-4 fill-black text-black" />
+                  <span>Купить VIP за $2.99</span>
+                </button>
+              </div>
+            )}
 
             {/* Platform Selector Tabs */}
             <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#121217] rounded-2xl border border-white/[0.08]">
@@ -1189,45 +1694,75 @@ export default function App() {
 
                       {/* Code Combination Display */}
                       <div className="pt-1">
-                        {platform === 'phone' ? (
-                          <div className="bg-[#09090d] border border-white/[0.08] rounded-xl p-3 flex items-center justify-between">
-                            <span className="font-mono font-bold text-sm text-[#D4FF00]">
-                              {cheat.codes.phone}
-                            </span>
-                            <span className="text-[10px] text-neutral-500 uppercase">Набор в телефоне</span>
-                          </div>
+                        {isVip ? (
+                          platform === 'phone' ? (
+                            <div className="bg-[#09090d] border border-white/[0.08] rounded-xl p-3 flex items-center justify-between">
+                              <span className="font-mono font-bold text-sm text-[#D4FF00]">
+                                {cheat.codes.phone}
+                              </span>
+                              <span className="text-[10px] text-neutral-500 uppercase">Набор в телефоне</span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5 p-2.5 bg-[#09090d] border border-white/[0.08] rounded-xl">
+                              {(platform === 'ps5' ? cheat.codes.ps5 : cheat.codes.xbox).map((glyph, idx) =>
+                                renderGamepadGlyph(glyph, platform, idx)
+                              )}
+                            </div>
+                          )
                         ) : (
-                          <div className="flex flex-wrap gap-1.5 p-2.5 bg-[#09090d] border border-white/[0.08] rounded-xl">
-                            {(platform === 'ps5' ? cheat.codes.ps5 : cheat.codes.xbox).map((glyph, idx) =>
-                              renderGamepadGlyph(glyph, platform, idx)
-                            )}
+                          <div
+                            onClick={handleInitiateVipPurchase}
+                            className="bg-[#09090d] border border-white/[0.06] rounded-xl p-3 flex items-center justify-between cursor-pointer hover:border-[#D4FF00]/40 transition-colors group"
+                            title="Нажмите, чтобы разблокировать в VIP"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <Lock className="w-4 h-4 text-neutral-500 group-hover:text-[#D4FF00] transition-colors" />
+                              <span className="font-mono text-xs text-neutral-500 tracking-widest select-none">
+                                • • • • • • • • • •
+                              </span>
+                            </div>
+                            <span className="text-[11px] font-bold text-[#D4FF00] group-hover:underline flex items-center space-x-1">
+                              <span>Только в VIP</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </span>
                           </div>
                         )}
                       </div>
 
-                      {/* Copy Action Button */}
+                      {/* Copy or Unlock Action Button */}
                       <div className="flex justify-end pt-0.5">
-                        <button
-                          type="button"
-                          onClick={() => handleCopyCheat(cheat)}
-                          className={`text-xs font-bold py-1.5 px-3 rounded-xl border flex items-center space-x-1.5 transition-all cursor-pointer ${
-                            isCopied
-                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                              : 'bg-white/[0.04] text-neutral-300 border-white/[0.08] hover:border-white/20 hover:text-white'
-                          }`}
-                        >
-                          {isCopied ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Скопировано</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Скопировать код</span>
-                            </>
-                          )}
-                        </button>
+                        {isVip ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCopyCheat(cheat)}
+                            className={`text-xs font-bold py-1.5 px-3 rounded-xl border flex items-center space-x-1.5 transition-all cursor-pointer ${
+                              isCopied
+                                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                                : 'bg-white/[0.04] text-neutral-300 border-white/[0.08] hover:border-white/20 hover:text-white'
+                            }`}
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Скопировано</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Скопировать код</span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleInitiateVipPurchase}
+                            className="text-[11px] font-bold py-1.5 px-3 rounded-xl bg-[#D4FF00]/10 hover:bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/30 flex items-center space-x-1.5 transition-all cursor-pointer shadow-sm hover:border-[#D4FF00]/60"
+                          >
+                            <Crown className="w-3.5 h-3.5 fill-[#D4FF00]" />
+                            <span>Разблокировать чит</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1413,36 +1948,67 @@ export default function App() {
         {activeTab === 'profile' && (
           <main className="flex-1 p-4 space-y-5 animate-in fade-in duration-150">
             {/* 1. ШАПКА ПРОФИЛЯ */}
-            <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] shadow-xl flex items-center space-x-4">
-              <img
-                src={userProfile.avatarUrl || DEFAULT_AVATAR}
-                alt="Игрок Leonida"
-                className="w-14 h-14 rounded-2xl object-cover border-2 border-[#D4FF00] shadow-[0_0_15px_rgba(212,255,0,0.25)]"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center space-x-2">
-                  <h2 className="text-base font-display font-bold text-white truncate">
-                    Игрок Leonida
-                  </h2>
-                  {isVip && (
-                    <span className="text-[10px] font-extrabold uppercase bg-[#D4FF00] text-black px-2 py-0.5 rounded-full shrink-0">
-                      VIP
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center space-x-1.5 mt-1">
-                  <span className="w-2 h-2 rounded-full bg-[#D4FF00] shrink-0" />
-                  <p className="text-xs text-neutral-300 truncate">
-                    {isVip ? 'Пожизненный Leonida VIP Pass' : 'Стандартный доступ'}
-                  </p>
-                </div>
-
-                {deviceId && (
-                  <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate flex items-center space-x-1">
-                    <Cpu className="w-3 h-3 text-neutral-400 shrink-0" />
-                    <span className="truncate">Device ID: {deviceId.slice(0, 16)}...</span>
+            <div className="p-5 rounded-3xl bg-[#121217] border border-white/[0.08] shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center space-x-4 min-w-0">
+                <img
+                  src={userProfile.avatarUrl || DEFAULT_AVATAR}
+                  alt={userProfile.displayName || 'Игрок Leonida'}
+                  className="w-14 h-14 rounded-2xl object-cover border-2 border-[#D4FF00] shadow-[0_0_15px_rgba(212,255,0,0.25)] shrink-0"
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-base font-display font-bold text-white truncate">
+                      {currentUser?.displayName || userProfile.displayName || 'Игрок Leonida'}
+                    </h2>
+                    {isVip && (
+                      <span className="text-[10px] font-extrabold uppercase bg-[#D4FF00] text-black px-2 py-0.5 rounded-full shrink-0">
+                        VIP
+                      </span>
+                    )}
                   </div>
+
+                  <div className="flex items-center space-x-1.5 mt-1">
+                    <span className="w-2 h-2 rounded-full bg-[#D4FF00] shrink-0" />
+                    <p className="text-xs text-neutral-300 truncate">
+                      {currentUser
+                        ? currentUser.email || 'Анонимный аккаунт Supabase'
+                        : isVip ? 'Пожизненный VIP Pass (Гость)' : 'Гостевой режим'}
+                    </p>
+                  </div>
+
+                  {currentUser ? (
+                    <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate">
+                      UUID: {currentUser.id.slice(0, 18)}...
+                    </div>
+                  ) : deviceId ? (
+                    <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate flex items-center space-x-1">
+                      <Cpu className="w-3 h-3 text-neutral-400 shrink-0" />
+                      <span className="truncate">Device ID: {deviceId.slice(0, 16)}...</span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Auth Action Button */}
+              <div className="flex items-center space-x-2 shrink-0 self-end sm:self-center">
+                {currentUser ? (
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="px-3.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 text-neutral-300 hover:text-white text-xs font-semibold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Выйти</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsAuthModalOpen(true)}
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center space-x-1.5 shadow-md transition-all cursor-pointer"
+                  >
+                    <LogIn className="w-3.5 h-3.5 text-black" />
+                    <span>Войти / Регистрация</span>
+                  </button>
                 )}
               </div>
             </div>
@@ -1467,22 +2033,139 @@ export default function App() {
                     </h3>
                     <p className="text-xs text-neutral-400 mt-0.5">
                       {isVip
-                        ? 'Пожизненный статус привязан к вашему устройству'
-                        : 'Эксклюзивный доступ и поддержка разработки'}
+                        ? 'Пожизненный статус привязан к вашему аккаунту и Supabase'
+                        : 'Эксклюзивный доступ ко всем читам и поддержка разработки'}
                     </p>
                   </div>
                 </div>
               </div>
 
               {isVip ? (
-                <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3 relative z-10">
-                  <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
-                  <div className="text-xs text-neutral-200">
-                    <span className="font-bold text-[#D4FF00]">VIP Pass Активен:</span> Лицензия привязана к оборудованию устройства (Device ID) и защищена от очистки кэша.
+                <div className="space-y-2.5 relative z-10">
+                  <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3">
+                    <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
+                    <div className="text-xs text-neutral-200">
+                      <span className="font-bold text-[#D4FF00]">VIP Pass Активен:</span> Лицензия подтверждена через базу данных Supabase и сохранена на устройстве.
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCheckSupabaseVip(true)}
+                    disabled={isCheckingSupabaseVip}
+                    className="w-full py-2 px-3 rounded-xl bg-black/40 hover:bg-black/60 border border-white/[0.08] text-neutral-400 hover:text-neutral-200 text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isCheckingSupabaseVip ? 'animate-spin text-[#D4FF00]' : ''}`} />
+                    <span>{isCheckingSupabaseVip ? 'Синхронизация...' : 'Синхронизировать статус с Supabase'}</span>
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-3 pt-1 relative z-10">
+                  {/* ВИЗУАЛЬНЫЙ ИНДИКАТОР СТАТУСА ПЛАТЕЖА */}
+                  {pendingOrder && (
+                    <div
+                      className={`p-4 rounded-2xl border transition-all ${
+                        pendingOrder.status === 'unpaid'
+                          ? 'bg-[#181112] border-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.08)]'
+                          : 'bg-[#151910] border-[#D4FF00]/40 shadow-[0_0_25px_rgba(212,255,0,0.12)]'
+                      } space-y-3`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center space-x-2.5">
+                          <div
+                            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                              pendingOrder.status === 'unpaid'
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                : 'bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40 shadow-[0_0_12px_rgba(212,255,0,0.2)]'
+                            }`}
+                          >
+                            {pendingOrder.status === 'checking' || isCheckingInvoice ? (
+                              <RefreshCw className="w-4 h-4 animate-spin text-[#D4FF00]" />
+                            ) : pendingOrder.status === 'unpaid' ? (
+                              <AlertCircle className="w-4 h-4 text-amber-400" />
+                            ) : (
+                              <Clock className="w-4 h-4 text-[#D4FF00] animate-pulse" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs font-display font-extrabold text-white">
+                                {pendingOrder.status === 'unpaid'
+                                  ? 'Платеж не найден'
+                                  : 'Ожидает подтверждения'}
+                              </span>
+                              <span
+                                className={`text-[9px] uppercase font-black px-2 py-0.5 rounded-full ${
+                                  pendingOrder.status === 'unpaid'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    : 'bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40 animate-pulse'
+                                }`}
+                              >
+                                {pendingOrder.status === 'unpaid' ? 'Требует проверки' : 'В обработке'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-neutral-400 mt-0.5">
+                              Счет #{pendingOrder.invoiceId} • {pendingOrder.amount} {pendingOrder.asset}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-xs font-mono font-black text-[#D4FF00]">
+                            {pendingOrder.amount} {pendingOrder.asset}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-neutral-300 leading-relaxed">
+                        {pendingOrder.status === 'unpaid'
+                          ? `Crypto Pay пока не зафиксировал перевод средств по счету #${pendingOrder.invoiceId}. Если вы уже отправили перевод, дождитесь 1-2 подтверждений сети (15-60 сек) и нажмите «Проверить платеж».`
+                          : 'Счет сформирован в платежном шлюзе Crypto Pay. Перейдите к оплате или проверьте статус счета.'}
+                      </p>
+
+                      {pendingOrder.lastCheckedAt && (
+                        <div className="text-[10px] text-neutral-400 flex items-center space-x-1">
+                          <Clock className="w-3 h-3 text-neutral-500" />
+                          <span>Время последней проверки: {pendingOrder.lastCheckedAt}</span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (pendingOrder.payUrl) openExternalUrl(pendingOrder.payUrl);
+                          }}
+                          className="flex-1 min-w-[140px] py-2 px-3 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-[11px] flex items-center justify-center space-x-1.5 transition-all shadow-md cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5 fill-black text-black" />
+                          <span>Оплатить в Crypto Pay</span>
+                          <ExternalLink className="w-3 h-3 opacity-70" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleCheckPendingOrder}
+                          disabled={isCheckingInvoice}
+                          className="py-2 px-3 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/10 text-white font-display font-semibold text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw
+                            className={`w-3.5 h-3.5 ${isCheckingInvoice ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`}
+                          />
+                          <span>Проверить платеж</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleCancelPendingOrder}
+                          className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                          title="Сбросить счет"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <div className="text-xs font-bold text-white flex items-center space-x-1.5">
@@ -1490,7 +2173,7 @@ export default function App() {
                         <span>Пожизненный VIP статус</span>
                       </div>
                       <div className="text-[11px] text-neutral-400 mt-0.5">
-                        Привязка к устройству через Secure Storage
+                        Прямая оплата через официальный шлюз Crypto Pay
                       </div>
                     </div>
 
@@ -1500,8 +2183,40 @@ export default function App() {
                       disabled={isProcessingPayment}
                       className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(212,255,0,0.3)] transition-all shrink-0 cursor-pointer disabled:opacity-50"
                     >
-                      <Crown className="w-4 h-4 fill-black text-black" />
+                      <Send className="w-4 h-4 fill-black text-black" />
                       <span>{isProcessingPayment ? 'Создание счета...' : 'Купить VIP за $2.99'}</span>
+                    </button>
+                  </div>
+
+                  {/* Облачная проверка статуса через Supabase */}
+                  <div className="p-3.5 rounded-2xl bg-black/30 border border-white/[0.06] space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-1.5 text-xs font-bold text-neutral-200">
+                        <Cloud className="w-3.5 h-3.5 text-[#D4FF00]" />
+                        <span>Облачная проверка Supabase</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopyDeviceId}
+                        className="text-[10px] text-[#D4FF00] hover:underline flex items-center space-x-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>Скопировать Device ID</span>
+                      </button>
+                    </div>
+
+                    <p className="text-[11px] text-neutral-400 leading-relaxed">
+                      После подтверждения транзакции в Crypto Pay статус автоматически фиксируется в профиле Supabase. Нажмите для синхронизации:
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCheckSupabaseVip(true)}
+                      disabled={isCheckingSupabaseVip}
+                      className="w-full py-2.5 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-neutral-200 font-display font-semibold text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isCheckingSupabaseVip ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`} />
+                      <span>{isCheckingSupabaseVip ? 'Проверка в Supabase...' : 'Проверить оплату в Supabase / Crypto Pay'}</span>
                     </button>
                   </div>
                 </div>
@@ -1844,7 +2559,161 @@ export default function App() {
         )}
 
         {/* ================================================================== */}
-        {/* MODAL: CRYPTO PAY INVOICE (@CryptoBot) */}
+        {/* MODAL: SUPABASE AUTHENTICATION (LOGIN / REGISTER / GUEST) */}
+        {/* ================================================================== */}
+        {isAuthModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
+            <div className="w-full max-w-sm bg-[#0e110d] border border-white/[0.12] rounded-t-3xl sm:rounded-3xl p-6 space-y-4 shadow-[0_0_40px_rgba(0,0,0,0.8)] animate-in slide-in-from-bottom duration-200">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-md">
+                    {authMode === 'login' ? <LogIn className="w-4 h-4 text-black" /> : <UserPlus className="w-4 h-4 text-black" />}
+                  </div>
+                  <div>
+                    <div className="font-display font-bold text-xs tracking-wider text-white">
+                      {authMode === 'login' ? 'Вход в аккаунт' : 'Регистрация'}
+                    </div>
+                    <p className="text-[10px] text-neutral-400">Облачный профиль Supabase Auth</p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAuthModalOpen(false)}
+                  className="p-1 rounded-full text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Tabs Switcher */}
+              <div className="flex p-1 bg-black/50 border border-white/[0.08] rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    authMode === 'login'
+                      ? 'bg-[#D4FF00] text-black shadow-sm'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Вход
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                  }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    authMode === 'register'
+                      ? 'bg-[#D4FF00] text-black shadow-sm'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Регистрация
+                </button>
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 flex items-start space-x-2 text-rose-300 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleAuthSubmit} className="space-y-3">
+                {authMode === 'register' && (
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-neutral-300">Позывной / Имя</label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                      <input
+                        type="text"
+                        placeholder="Например: Tommy_Leonida"
+                        value={authDisplayName}
+                        onChange={(e) => setAuthDisplayName(e.target.value)}
+                        className="w-full bg-black/60 border border-white/[0.12] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-neutral-300">Email адрес</label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                    <input
+                      type="email"
+                      required
+                      placeholder="player@leonida.com"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      className="w-full bg-black/60 border border-white/[0.12] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-neutral-300">Пароль (от 6 символов)</label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-neutral-500 absolute left-3 top-3" />
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      className="w-full bg-black/60 border border-white/[0.12] rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-[#D4FF00]"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isAuthProcessing}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] text-black font-display font-extrabold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  {isAuthProcessing ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                  ) : authMode === 'login' ? (
+                    <>
+                      <LogIn className="w-4 h-4 text-black" />
+                      <span>Войти в аккаунт</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-4 h-4 text-black" />
+                      <span>Создать аккаунт</span>
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-white/[0.08]" />
+                <span className="flex-shrink mx-2 text-[10px] text-neutral-500 uppercase font-bold">или</span>
+                <div className="flex-grow border-t border-white/[0.08]" />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGuestSignIn}
+                disabled={isAuthProcessing}
+                className="w-full py-2 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-neutral-300 hover:text-white text-xs font-semibold flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-neutral-400" />
+                <span>Продолжить в гостевом режиме</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================== */}
+        {/* MODAL: CRYPTO PAY INVOICE (DIRECT CRYPTO BOT GATEWAY) */}
         {/* ================================================================== */}
         {activeInvoice && (
           <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex justify-center items-end sm:items-center p-0 sm:p-4">
@@ -1856,9 +2725,9 @@ export default function App() {
                   </div>
                   <div>
                     <div className="font-display font-bold text-xs tracking-wider text-white">
-                      Telegram @CryptoBot
+                      Crypto Pay (Crypto Bot)
                     </div>
-                    <p className="text-[10px] text-neutral-400">Crypto Pay API • Официальный шлюз</p>
+                    <p className="text-[10px] text-neutral-400">Прямой платежный шлюз Crypto Pay API</p>
                   </div>
                 </div>
 
@@ -1907,11 +2776,11 @@ export default function App() {
               <div className="space-y-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => openExternalUrl(activeInvoice.pay_url)}
+                  onClick={() => openExternalUrl(activeInvoice.bot_invoice_url || activeInvoice.pay_url)}
                   className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] text-black font-display font-extrabold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all shadow-md cursor-pointer"
                 >
                   <Send className="w-4 h-4 fill-black text-black shrink-0" />
-                  <span>1. Оплатить в Telegram @CryptoBot</span>
+                  <span>1. Перейти к оплате в Crypto Pay</span>
                   <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-80" />
                 </button>
 
