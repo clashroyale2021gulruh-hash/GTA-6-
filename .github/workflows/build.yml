@@ -50,7 +50,7 @@ jobs:
           fi
 
           if [ ! -f android/app/release.keystore ]; then
-            echo "Generating release.keystore..."
+            echo "Generating release.keystore with keytool..."
             keytool -genkeypair -v \
               -keystore android/app/release.keystore \
               -alias gta6release \
@@ -71,21 +71,56 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Verify and Prepare Release APK
+      - name: Verify, Align and Sign Release APK with apksigner
         run: |
           OUTPUT_DIR="android/app/build/outputs/apk/release"
           echo "Listing release outputs directory:"
           ls -la "$OUTPUT_DIR"
 
-          if [ -f "$OUTPUT_DIR/app-release.apk" ]; then
-            echo "Found signed release APK: $OUTPUT_DIR/app-release.apk"
-          elif [ -f "$OUTPUT_DIR/app-release-unsigned.apk" ]; then
-            echo "Renaming unsigned to app-release.apk..."
-            cp "$OUTPUT_DIR/app-release-unsigned.apk" "$OUTPUT_DIR/app-release.apk"
-          else
-            echo "Searching for any release apk in android/app/build/outputs/apk/:"
-            find android/app/build/outputs/apk/ -name "*.apk"
+          APK_FILE=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No APK file found in $OUTPUT_DIR"
+            exit 1
           fi
+          echo "Found APK: $APK_FILE"
+
+          APKSIGNER=$(find $ANDROID_SDK_ROOT/build-tools/ -name apksigner | sort -V | tail -n 1)
+          ZIPALIGN=$(find $ANDROID_SDK_ROOT/build-tools/ -name zipalign | sort -V | tail -n 1)
+          echo "Using apksigner: $APKSIGNER"
+          echo "Using zipalign: $ZIPALIGN"
+
+          TARGET_APK="$OUTPUT_DIR/app-release.apk"
+          if [ "$APK_FILE" != "$TARGET_APK" ]; then
+            cp "$APK_FILE" "$TARGET_APK"
+          fi
+
+          # Check if APK is already validly signed with v1/v2
+          if ! "$APKSIGNER" verify --verbose "$TARGET_APK"; then
+            echo "APK is not validly signed. Signing with release.keystore..."
+            
+            # Align if not aligned
+            "$ZIPALIGN" -c -v 4 "$TARGET_APK" || {
+              echo "Aligning APK..."
+              "$ZIPALIGN" -f -p 4 "$TARGET_APK" "/tmp/aligned.apk"
+              mv "/tmp/aligned.apk" "$TARGET_APK"
+            }
+
+            "$APKSIGNER" sign \
+              --ks android/app/release.keystore \
+              --ks-pass pass:gta6releasepass \
+              --ks-key-alias gta6release \
+              --key-pass pass:gta6releasepass \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              "$TARGET_APK"
+          else
+            echo "APK is already verified and signed by Gradle!"
+          fi
+
+          echo "Final apksigner verification:"
+          "$APKSIGNER" verify --verbose "$TARGET_APK"
+          ls -lh "$TARGET_APK"
 
       - name: Upload Release APK (app-release.apk)
         uses: actions/upload-artifact@v4

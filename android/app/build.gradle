@@ -18,52 +18,28 @@ android {
     }
     signingConfigs {
         release {
-            def relKs = file('release.keystore')
-            def relBase64 = file('release.keystore.base64')
-            if (!relKs.exists() && relBase64.exists()) {
-                try {
-                    relKs.bytes = relBase64.text.trim().decodeBase64()
-                } catch (Exception e) {
-                    println 'Failed to decode release.keystore.base64: ' + e.message
-                }
-            }
-            if (relKs.exists()) {
-                storeFile relKs
-                storePassword 'gta6releasepass'
-                keyAlias 'gta6release'
-                keyPassword 'gta6releasepass'
-            }
+            storeFile file('release.keystore')
+            storePassword 'gta6releasepass'
+            keyAlias 'gta6release'
+            keyPassword 'gta6releasepass'
+            v1SigningEnabled true
+            v2SigningEnabled true
         }
         debug {
-            def ksFile = file('debug.keystore')
-            def ksBase64 = file('debug.keystore.base64')
-            if (!ksFile.exists() && ksBase64.exists()) {
-                try {
-                    ksFile.bytes = ksBase64.text.trim().decodeBase64()
-                } catch (Exception e) {
-                    println "Failed to decode debug.keystore.base64: " + e.message
-                }
-            }
-            if (ksFile.exists()) {
-                storeFile ksFile
-                storePassword 'android'
-                keyAlias 'androiddebugkey'
-                keyPassword 'android'
-            }
+            storeFile file('release.keystore')
+            storePassword 'gta6releasepass'
+            keyAlias 'gta6release'
+            keyPassword 'gta6releasepass'
+            v1SigningEnabled true
+            v2SigningEnabled true
         }
     }
     buildTypes {
         debug {
-            if (file('debug.keystore').exists()) {
-                signingConfig signingConfigs.debug
-            }
+            signingConfig signingConfigs.release
         }
         release {
-            if (file('release.keystore').exists()) {
-                signingConfig signingConfigs.release
-            } else if (file('debug.keystore').exists()) {
-                signingConfig signingConfigs.debug
-            }
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
