@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "1024907134135",
+    "project_id": "ai-studio-gta6companion",
+    "storage_bucket": "ai-studio-gta6companion.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1024907134135:android:c1e2a3b4c5d6e7f8",
+        "android_client_info": {
+          "package_name": "com.gta6.companion"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com",
+          "client_type": 3
+        },
+        {
+          "client_id": "1024907134135-android.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.gta6.companion",
+            "certificate_hash": "0c7dad2960b8bed295de0a648278bbe7c7d4a3a2"
+          }
+        },
+        {
+          "client_id": "1024907134135-android-legacy.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.gta6.companion",
+            "certificate_hash": "3e69d157cc2231060b34d94a44504c2c18d7bbee"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": ""
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1024907134135-vujihlafhnfgdv0i1hp8cvfhd8gcg32f.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
