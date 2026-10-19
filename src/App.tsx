@@ -2000,167 +2000,86 @@ export default function App() {
               </div>
             </div>
 
-            {/* 2. КАРТОЧКА VIP PASS */}
-            <div className="rounded-3xl bg-gradient-to-br from-[#141910] via-[#10130e] to-[#0a0c09] border border-[#D4FF00]/40 p-5 space-y-4 shadow-[0_0_30px_rgba(212,255,0,0.06)] relative overflow-hidden">
-              <div className="absolute -top-12 -right-12 w-40 h-40 bg-[#D4FF00]/15 rounded-full blur-3xl pointer-events-none" />
-
-              <div className="flex items-start justify-between relative z-10">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#D4FF00] to-[#A3E635] flex items-center justify-center text-black shadow-[0_0_20px_rgba(212,255,0,0.35)] shrink-0">
-                    <Crown className="w-5 h-5 fill-black text-black" />
+            {/* 2. КАРТОЧКА VIP PASS (КОМПАКТНАЯ) */}
+            {isVip ? (
+              <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-[#D4FF00] flex items-center justify-center text-black shrink-0">
+                    <Crown className="w-4 h-4 fill-black text-black" />
                   </div>
                   <div>
-                    <h3 className="text-base font-display font-extrabold text-white flex items-center space-x-2">
+                    <div className="text-xs font-bold text-white flex items-center space-x-1.5">
                       <span>Leonida VIP Pass</span>
-                      {isVip && (
-                        <span className="text-[10px] uppercase font-extrabold bg-[#D4FF00] text-black px-2.5 py-0.5 rounded-full shadow-[0_0_10px_rgba(212,255,0,0.3)]">
-                          VIP Активен
-                        </span>
-                      )}
-                    </h3>
-                    <p className="text-xs text-neutral-400 mt-0.5">
-                      {isVip
-                        ? 'Полный доступ ко всем читам и эксклюзивам разблокирован'
-                        : 'Разблокируйте все секретные читы и эксклюзивный контент'}
-                    </p>
+                      <span className="text-[9px] uppercase font-black bg-[#D4FF00] text-black px-1.5 py-0.5 rounded">
+                        АКТИВЕН
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">Все читы разблокированы</p>
                   </div>
                 </div>
               </div>
-
-              {isVip ? (
-                <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3 relative z-10">
-                  <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
-                  <div className="text-xs text-neutral-200">
-                    <span className="font-bold text-[#D4FF00]">VIP Активен:</span> Все читы и материалы игры разблокированы навсегда.
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3 pt-1 relative z-10">
-                  {/* ВИЗУАЛЬНЫЙ ИНДИКАТОР СТАТУСА ПЛАТЕЖА */}
-                  {pendingOrder && (
-                    <div
-                      className={`p-4 rounded-2xl border transition-all ${
-                        pendingOrder.status === 'unpaid'
-                          ? 'bg-[#181112] border-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.08)]'
-                          : 'bg-[#151910] border-[#D4FF00]/40 shadow-[0_0_25px_rgba(212,255,0,0.12)]'
-                      } space-y-3`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center space-x-2.5">
-                          <div
-                            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                              pendingOrder.status === 'unpaid'
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                : 'bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40 shadow-[0_0_12px_rgba(212,255,0,0.2)]'
-                            }`}
-                          >
-                            {pendingOrder.status === 'checking' || isCheckingInvoice ? (
-                              <RefreshCw className="w-4 h-4 animate-spin text-[#D4FF00]" />
-                            ) : pendingOrder.status === 'unpaid' ? (
-                              <AlertCircle className="w-4 h-4 text-amber-400" />
-                            ) : (
-                              <Clock className="w-4 h-4 text-[#D4FF00] animate-pulse" />
-                            )}
-                          </div>
-                          <div>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs font-display font-extrabold text-white">
-                                {pendingOrder.status === 'unpaid'
-                                  ? 'Платеж не найден'
-                                  : 'Ожидает подтверждения'}
-                              </span>
-                              <span
-                                className={`text-[9px] uppercase font-black px-2 py-0.5 rounded-full ${
-                                  pendingOrder.status === 'unpaid'
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-[#D4FF00]/20 text-[#D4FF00] border border-[#D4FF00]/40 animate-pulse'
-                                }`}
-                              >
-                                {pendingOrder.status === 'unpaid' ? 'Требует проверки' : 'В обработке'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-neutral-400 mt-0.5">
-                              Счет #{pendingOrder.invoiceId} • {pendingOrder.amount} {pendingOrder.asset}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <span className="text-xs font-mono font-black text-[#D4FF00]">
-                            {pendingOrder.amount} {pendingOrder.asset}
-                          </span>
-                        </div>
-                      </div>
-
-                      <p className="text-[11px] text-neutral-300 leading-relaxed">
-                        {pendingOrder.status === 'unpaid'
-                          ? 'Ожидание перевода в Crypto Pay. Нажмите «Проверить платеж» после отправки.'
-                          : 'Счет сформирован в Crypto Pay. Перейдите к оплате или проверьте статус.'}
-                      </p>
-
-
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (pendingOrder.payUrl) openExternalUrl(pendingOrder.payUrl);
-                          }}
-                          className="flex-1 min-w-[140px] py-2 px-3 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-[11px] flex items-center justify-center space-x-1.5 transition-all shadow-md cursor-pointer"
-                        >
-                          <Send className="w-3.5 h-3.5 fill-black text-black" />
-                          <span>Оплатить в Crypto Pay</span>
-                          <ExternalLink className="w-3 h-3 opacity-70" />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={handleCheckPendingOrder}
-                          disabled={isCheckingInvoice}
-                          className="py-2 px-3 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/10 text-white font-display font-semibold text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
-                        >
-                          <RefreshCw
-                            className={`w-3.5 h-3.5 ${isCheckingInvoice ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`}
-                          />
-                          <span>Проверить платеж</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={handleCancelPendingOrder}
-                          className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-neutral-400 hover:text-white transition-colors cursor-pointer"
-                          title="Сбросить счет"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
+            ) : (
+              <div className="p-3.5 rounded-2xl bg-[#121217] border border-[#D4FF00]/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-[#D4FF00] flex items-center justify-center text-black shrink-0">
+                      <Crown className="w-4 h-4 fill-black text-black" />
                     </div>
-                  )}
-
-                  <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs font-bold text-white flex items-center space-x-1.5">
-                        <Crown className="w-3.5 h-3.5 text-[#D4FF00]" />
-                        <span>Пожизненный VIP статус</span>
-                      </div>
-                      <div className="text-[11px] text-neutral-400 mt-0.5">
-                        Прямая оплата через официальный шлюз Crypto Pay
-                      </div>
+                      <div className="text-xs font-bold text-white">Leonida VIP</div>
+                      <p className="text-[11px] text-neutral-400">Секретные читы и обновления</p>
                     </div>
+                  </div>
 
+                  {!pendingOrder && (
                     <button
                       type="button"
                       onClick={handleInitiateVipPurchase}
                       disabled={isProcessingPayment}
-                      className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#D4FF00] to-[#A3E635] hover:from-[#e5ff4d] hover:to-[#bbf746] text-black font-display font-extrabold text-xs flex items-center justify-center space-x-2 shadow-[0_0_18px_rgba(212,255,0,0.3)] transition-all shrink-0 cursor-pointer disabled:opacity-50"
+                      className="py-1.5 px-3.5 rounded-xl bg-[#D4FF00] hover:bg-[#bbf746] text-black font-extrabold text-xs transition-all cursor-pointer disabled:opacity-50 shrink-0"
                     >
-                      <Send className="w-4 h-4 fill-black text-black" />
-                      <span>{isProcessingPayment ? 'Создание счета...' : 'Купить VIP за $2.99'}</span>
+                      {isProcessingPayment ? "..." : "$2.99"}
                     </button>
-                  </div>
-
+                  )}
                 </div>
-              )}
-            </div>
+
+                {pendingOrder && (
+                  <div className="pt-2 border-t border-white/[0.06] flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-neutral-300 truncate">
+                      Счет #{pendingOrder.invoiceId} • {pendingOrder.amount} {pendingOrder.asset}
+                    </span>
+                    <div className="flex items-center space-x-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (pendingOrder.payUrl) openExternalUrl(pendingOrder.payUrl);
+                        }}
+                        className="py-1 px-2.5 rounded-lg bg-[#D4FF00] text-black text-[11px] font-bold cursor-pointer"
+                      >
+                        Оплатить
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCheckPendingOrder}
+                        disabled={isCheckingInvoice}
+                        className="p-1 rounded-lg bg-white/10 text-neutral-300 hover:text-white cursor-pointer"
+                        title="Проверить"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isCheckingInvoice ? "animate-spin text-[#D4FF00]" : ""}`} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCancelPendingOrder}
+                        className="p-1 rounded-lg bg-white/10 text-neutral-400 hover:text-rose-400 cursor-pointer"
+                        title="Отмена"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* 3. БЛОК: СОХРАНЕННЫЕ ЧИТЫ */}
             <div className="space-y-3">
