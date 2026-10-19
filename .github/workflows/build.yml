@@ -1,61 +1,96 @@
-name: Build Android APK
+name: Build Release APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Build Android Release APK
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          cache: npm
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '21'
-          distribution: 'temurin'
 
-      - name: Install dependencies & Build Web
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
         run: |
-          npm install --legacy-peer-deps
+          npm ci || npm install --legacy-peer-deps
+
+      - name: Build web application
+        run: |
           npm run build
 
       - name: Sync Capacitor Android
         run: |
           npx cap sync android
 
-      - name: Setup Signing Keystore
+      - name: Setup Release Keystore
         run: |
-          if [ -f android/app/debug.keystore.base64 ] && [ ! -f android/app/debug.keystore ]; then
-            echo "Restoring debug.keystore from base64..."
-            base64 -d android/app/debug.keystore.base64 > android/app/debug.keystore
+          if [ -f android/app/release.keystore.base64 ] && [ ! -f android/app/release.keystore ]; then
+            echo "Restoring release.keystore from base64..."
+            base64 -d android/app/release.keystore.base64 > android/app/release.keystore
           fi
-          if [ ! -f android/app/debug.keystore ]; then
-            echo "Generating debug.keystore with keytool..."
-            keytool -genkeypair -v -keystore android/app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+
+          if [ ! -f android/app/release.keystore ]; then
+            echo "Generating release.keystore..."
+            keytool -genkeypair -v \
+              -keystore android/app/release.keystore \
+              -alias gta6release \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass gta6releasepass \
+              -keypass gta6releasepass \
+              -dname "CN=GTA6Companion, OU=App, O=GTA, L=ViceCity, S=FL, C=US"
           fi
-          mkdir -p ~/.android && cp android/app/debug.keystore ~/.android/debug.keystore
 
-      - name: Show Signing Report (SHA-1)
+          ls -la android/app/release.keystore
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build Release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify and Prepare Release APK
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew signingReport
+          OUTPUT_DIR="android/app/build/outputs/apk/release"
+          echo "Listing release outputs directory:"
+          ls -la "$OUTPUT_DIR"
 
-      - name: Build APK with Gradle
-        run: |
-          cd android
-          ./gradlew assembleDebug
+          if [ -f "$OUTPUT_DIR/app-release.apk" ]; then
+            echo "Found signed release APK: $OUTPUT_DIR/app-release.apk"
+          elif [ -f "$OUTPUT_DIR/app-release-unsigned.apk" ]; then
+            echo "Renaming unsigned to app-release.apk..."
+            cp "$OUTPUT_DIR/app-release-unsigned.apk" "$OUTPUT_DIR/app-release.apk"
+          else
+            echo "Searching for any release apk in android/app/build/outputs/apk/:"
+            find android/app/build/outputs/apk/ -name "*.apk"
+          fi
 
-      - name: Upload APK artifact
+      - name: Upload Release APK (app-release.apk)
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: app-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -19,6 +19,14 @@ android {
     signingConfigs {
         release {
             def relKs = file('release.keystore')
+            def relBase64 = file('release.keystore.base64')
+            if (!relKs.exists() && relBase64.exists()) {
+                try {
+                    relKs.bytes = relBase64.text.trim().decodeBase64()
+                } catch (Exception e) {
+                    println 'Failed to decode release.keystore.base64: ' + e.message
+                }
+            }
             if (relKs.exists()) {
                 storeFile relKs
                 storePassword 'gta6releasepass'
