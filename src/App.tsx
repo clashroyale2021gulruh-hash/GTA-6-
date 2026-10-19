@@ -1967,25 +1967,12 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="flex items-center space-x-1.5 mt-1">
-                    <span className="w-2 h-2 rounded-full bg-[#D4FF00] shrink-0" />
-                    <p className="text-xs text-neutral-300 truncate">
-                      {currentUser
-                        ? currentUser.email || 'Анонимный аккаунт Supabase'
-                        : isVip ? 'Пожизненный VIP Pass (Гость)' : 'Гостевой режим'}
+                  <div className="flex items-center space-x-2 mt-1">
+                    <span className={`w-2 h-2 rounded-full ${isVip ? "bg-[#D4FF00] shadow-[0_0_8px_#D4FF00]" : "bg-emerald-400"}`} />
+                    <p className="text-xs text-neutral-300 truncate font-medium">
+                      {currentUser?.email || (isVip ? 'VIP Статус активен' : 'В сети')}
                     </p>
                   </div>
-
-                  {currentUser ? (
-                    <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate">
-                      UUID: {currentUser.id.slice(0, 18)}...
-                    </div>
-                  ) : deviceId ? (
-                    <div className="text-[10px] text-neutral-500 font-mono mt-1 truncate flex items-center space-x-1">
-                      <Cpu className="w-3 h-3 text-neutral-400 shrink-0" />
-                      <span className="truncate">Device ID: {deviceId.slice(0, 16)}...</span>
-                    </div>
-                  ) : null}
                 </div>
               </div>
 
@@ -2033,30 +2020,19 @@ export default function App() {
                     </h3>
                     <p className="text-xs text-neutral-400 mt-0.5">
                       {isVip
-                        ? 'Пожизненный статус привязан к вашему аккаунту и Supabase'
-                        : 'Эксклюзивный доступ ко всем читам и поддержка разработки'}
+                        ? 'Полный доступ ко всем читам и эксклюзивам разблокирован'
+                        : 'Разблокируйте все секретные читы и эксклюзивный контент'}
                     </p>
                   </div>
                 </div>
               </div>
 
               {isVip ? (
-                <div className="space-y-2.5 relative z-10">
-                  <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3">
-                    <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
-                    <div className="text-xs text-neutral-200">
-                      <span className="font-bold text-[#D4FF00]">VIP Pass Активен:</span> Лицензия подтверждена через базу данных Supabase и сохранена на устройстве.
-                    </div>
+                <div className="p-3.5 rounded-2xl bg-[#D4FF00]/10 border border-[#D4FF00]/30 flex items-center space-x-3 relative z-10">
+                  <ShieldCheck className="w-5 h-5 text-[#D4FF00] shrink-0" />
+                  <div className="text-xs text-neutral-200">
+                    <span className="font-bold text-[#D4FF00]">VIP Активен:</span> Все читы и материалы игры разблокированы навсегда.
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCheckSupabaseVip(true)}
-                    disabled={isCheckingSupabaseVip}
-                    className="w-full py-2 px-3 rounded-xl bg-black/40 hover:bg-black/60 border border-white/[0.08] text-neutral-400 hover:text-neutral-200 text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isCheckingSupabaseVip ? 'animate-spin text-[#D4FF00]' : ''}`} />
-                    <span>{isCheckingSupabaseVip ? 'Синхронизация...' : 'Синхронизировать статус с Supabase'}</span>
-                  </button>
                 </div>
               ) : (
                 <div className="space-y-3 pt-1 relative z-10">
@@ -2118,16 +2094,10 @@ export default function App() {
 
                       <p className="text-[11px] text-neutral-300 leading-relaxed">
                         {pendingOrder.status === 'unpaid'
-                          ? `Crypto Pay пока не зафиксировал перевод средств по счету #${pendingOrder.invoiceId}. Если вы уже отправили перевод, дождитесь 1-2 подтверждений сети (15-60 сек) и нажмите «Проверить платеж».`
-                          : 'Счет сформирован в платежном шлюзе Crypto Pay. Перейдите к оплате или проверьте статус счета.'}
+                          ? 'Ожидание перевода в Crypto Pay. Нажмите «Проверить платеж» после отправки.'
+                          : 'Счет сформирован в Crypto Pay. Перейдите к оплате или проверьте статус.'}
                       </p>
 
-                      {pendingOrder.lastCheckedAt && (
-                        <div className="text-[10px] text-neutral-400 flex items-center space-x-1">
-                          <Clock className="w-3 h-3 text-neutral-500" />
-                          <span>Время последней проверки: {pendingOrder.lastCheckedAt}</span>
-                        </div>
-                      )}
 
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <button
@@ -2188,37 +2158,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Облачная проверка статуса через Supabase */}
-                  <div className="p-3.5 rounded-2xl bg-black/30 border border-white/[0.06] space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-1.5 text-xs font-bold text-neutral-200">
-                        <Cloud className="w-3.5 h-3.5 text-[#D4FF00]" />
-                        <span>Облачная проверка Supabase</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleCopyDeviceId}
-                        className="text-[10px] text-[#D4FF00] hover:underline flex items-center space-x-1 cursor-pointer"
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>Скопировать Device ID</span>
-                      </button>
-                    </div>
-
-                    <p className="text-[11px] text-neutral-400 leading-relaxed">
-                      После подтверждения транзакции в Crypto Pay статус автоматически фиксируется в профиле Supabase. Нажмите для синхронизации:
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => handleCheckSupabaseVip(true)}
-                      disabled={isCheckingSupabaseVip}
-                      className="w-full py-2.5 px-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-neutral-200 font-display font-semibold text-xs flex items-center justify-center space-x-2 transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isCheckingSupabaseVip ? 'animate-spin text-[#D4FF00]' : 'text-neutral-400'}`} />
-                      <span>{isCheckingSupabaseVip ? 'Проверка в Supabase...' : 'Проверить оплату в Supabase / Crypto Pay'}</span>
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
