@@ -217,11 +217,14 @@ export async function checkSupabaseVipStatus(
         errorMessage: 'Активная VIP-лицензия не найдена'
       };
     } catch (err: any) {
+      const msg = err?.message || '';
       return {
         isVip: false,
         vipActive: false,
         source: 'error',
-        errorMessage: err?.message || 'Ошибка запроса к Supabase'
+        errorMessage: msg.includes('Failed to fetch') || msg.includes('fetch')
+          ? 'Оффлайн-режим: сервер проверки временно недоступен'
+          : (msg || 'Ошибка соединения с сервером')
       };
     }
   })();

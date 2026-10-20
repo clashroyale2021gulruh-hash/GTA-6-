@@ -746,7 +746,7 @@ export default function App() {
           ...prev,
           displayName: user.displayName || prev.displayName
         }));
-        showToast('Регистрация в Supabase успешна!');
+        showToast('Регистрация прошла успешно!');
       }
 
       setIsAuthModalOpen(false);
@@ -754,7 +754,12 @@ export default function App() {
       setAuthPassword('');
       setAuthDisplayName('');
     } catch (err: any) {
-      setAuthError(err?.message || 'Ошибка авторизации. Проверьте данные.');
+      const msg = err?.message || '';
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+        setAuthError('Ошибка подключения к сети. Проверьте интернет-соединение.');
+      } else {
+        setAuthError(msg || 'Ошибка авторизации. Проверьте данные.');
+      }
     } finally {
       setIsAuthProcessing(false);
     }
@@ -2431,7 +2436,7 @@ export default function App() {
                     <div className="font-display font-bold text-xs tracking-wider text-white">
                       {authMode === 'login' ? 'Вход в аккаунт' : 'Регистрация'}
                     </div>
-                    <p className="text-[10px] text-neutral-400">Облачный профиль Supabase Auth</p>
+                    <p className="text-[10px] text-neutral-400">Профиль игрока Leonida</p>
                   </div>
                 </div>
 

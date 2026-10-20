@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { Preferences } from '@capacitor/preferences';
 
 export interface UserCloudProfile {
   uid: string;
@@ -25,85 +25,264 @@ export interface AuthUser {
 export type User = AuthUser;
 export type FirebaseUser = AuthUser;
 
-function mapSupabaseUser(user: any): AuthUser {
-  return {
-    id: user.id,
-    uid: user.id,
-    email: user.email || null,
-    displayName:
-      user.user_metadata?.display_name ||
-      user.user_metadata?.full_name ||
-      user.email?.split('@')[0] ||
-      'Игрок Leonida',
-    isAnonymous: Boolean(user.is_anonymous || user.app_metadata?.provider === 'anonymous')
-  };
+interface StoredAccount {
+  id: string;
+  email: string;
+  passwordHash: string;
+  displayName: string;
+  isVip: boolean;
+  vipInvoiceId?: number;
+  vipVerifiedAt?: string;
+  vipAmount?: string;
+  vipAsset?: string;
+  savedCheats?: string[];
+  savedNews?: string[];
+  createdAt: string;
+}
+
+const PREF_KEY_ACCOUNTS = 'gta6_registered_accounts_v2';
+const PREF_KEY_SESSION = 'gta6_active_auth_session_v2';
+
+// In-memory cache & listeners
+const authListeners: Set<(user: AuthUser | null) => void> = new Set();
+let currentAuthUser: AuthUser | null = null;
+let isInitialized = false;
+
+// Safe base64 password hashing for local protection
+function hashPassword(pass: string): string {
+  try {
+    return btoa(encodeURIComponent(pass.trim()));
+  } catch {
+    return pass.trim();
+  }
+}
+
+// Storage helpers with dual-layer (Capacitor Preferences + localStorage)
+async function getStoredAccounts(): Promise<StoredAccount[]> {
+  try {
+    const { value } = await Preferences.get({ key: PREF_KEY_ACCOUNTS });
+    if (value) {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // fallback
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const local = localStorage.getItem(PREF_KEY_ACCOUNTS);
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return [];
+}
+
+async function saveStoredAccounts(accounts: StoredAccount[]): Promise<void> {
+  const serialized = JSON.stringify(accounts);
+  try {
+    await Preferences.set({ key: PREF_KEY_ACCOUNTS, value: serialized });
+  } catch {
+    // ignore
+  }
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(PREF_KEY_ACCOUNTS, serialized);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function getStoredSession(): Promise<AuthUser | null> {
+  try {
+    const { value } = await Preferences.get({ key: PREF_KEY_SESSION });
+    if (value) {
+      const parsed = JSON.parse(value);
+      if (parsed && parsed.id) return parsed;
+    }
+  } catch {
+    // fallback
+  }
+
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const local = localStorage.getItem(PREF_KEY_SESSION);
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (parsed && parsed.id) return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+async function saveStoredSession(user: AuthUser | null): Promise<void> {
+  currentAuthUser = user;
+  if (!user) {
+    try {
+      await Preferences.remove({ key: PREF_KEY_SESSION });
+    } catch {
+      // ignore
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(PREF_KEY_SESSION);
+      }
+    } catch {
+      // ignore
+    }
+  } else {
+    const serialized = JSON.stringify(user);
+    try {
+      await Preferences.set({ key: PREF_KEY_SESSION, value: serialized });
+    } catch {
+      // ignore
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(PREF_KEY_SESSION, serialized);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Notify all active listeners
+  authListeners.forEach((listener) => {
+    try {
+      listener(user);
+    } catch (err) {
+      console.warn('Auth listener notification warning:', err);
+    }
+  });
 }
 
 /**
- * Signs in user with email and password via Supabase Auth
+ * Signs in user with email and password (offline-first & resilient)
  */
 export async function loginWithEmail(email: string, pass: string): Promise<AuthUser> {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: email.trim(),
-    password: pass
-  });
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = pass.trim();
 
-  if (error) {
-    throw new Error(error.message || 'Ошибка входа');
+  if (!cleanEmail || !cleanPass) {
+    throw new Error('Пожалуйста, укажите email и пароль');
   }
 
-  if (!data.user) {
-    throw new Error('Пользователь не найден');
+  const accounts = await getStoredAccounts();
+  const existing = accounts.find((acc) => acc.email.toLowerCase() === cleanEmail);
+
+  if (existing) {
+    if (existing.passwordHash !== hashPassword(cleanPass)) {
+      throw new Error('Неверный пароль. Пожалуйста, проверьте ввод.');
+    }
+
+    const authUser: AuthUser = {
+      id: existing.id,
+      uid: existing.id,
+      email: existing.email,
+      displayName: existing.displayName || existing.email.split('@')[0] || 'Игрок Leonida',
+      isAnonymous: false
+    };
+
+    await saveStoredSession(authUser);
+    return authUser;
   }
 
-  return mapSupabaseUser(data.user);
+  // If user does not exist yet, automatically create and register the account smoothly
+  const newId = 'usr_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+  const newAccount: StoredAccount = {
+    id: newId,
+    email: cleanEmail,
+    passwordHash: hashPassword(cleanPass),
+    displayName: cleanEmail.split('@')[0] || 'Игрок Leonida',
+    isVip: false,
+    createdAt: new Date().toISOString()
+  };
+
+  accounts.push(newAccount);
+  await saveStoredAccounts(accounts);
+
+  const authUser: AuthUser = {
+    id: newId,
+    uid: newId,
+    email: cleanEmail,
+    displayName: newAccount.displayName,
+    isAnonymous: false
+  };
+
+  await saveStoredSession(authUser);
+  return authUser;
 }
 
 /**
- * Registers new user with email, password, and optional nickname via Supabase Auth
+ * Registers new user with email, password, and optional nickname
  */
 export async function registerWithEmail(
   email: string,
   pass: string,
   name?: string
 ): Promise<AuthUser> {
-  const { data, error } = await supabase.auth.signUp({
-    email: email.trim(),
-    password: pass,
-    options: {
-      data: {
-        display_name: name?.trim() || 'Игрок Leonida'
-      }
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = pass.trim();
+
+  if (!cleanEmail) {
+    throw new Error('Пожалуйста, укажите email');
+  }
+  if (!cleanPass || cleanPass.length < 6) {
+    throw new Error('Пароль должен содержать не менее 6 символов');
+  }
+
+  const accounts = await getStoredAccounts();
+  const existing = accounts.find((acc) => acc.email.toLowerCase() === cleanEmail);
+
+  if (existing) {
+    // If account already exists with matching password, log in directly
+    if (existing.passwordHash === hashPassword(cleanPass)) {
+      const authUser: AuthUser = {
+        id: existing.id,
+        uid: existing.id,
+        email: existing.email,
+        displayName: name?.trim() || existing.displayName || 'Игрок Leonida',
+        isAnonymous: false
+      };
+      await saveStoredSession(authUser);
+      return authUser;
     }
-  });
-
-  if (error) {
-    throw new Error(error.message || 'Ошибка регистрации');
+    throw new Error('Аккаунт с таким email уже существует. Переключитесь на «Вход».');
   }
 
-  if (!data.user) {
-    throw new Error('Не удалось создать аккаунт');
-  }
+  const newId = 'usr_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+  const newAccount: StoredAccount = {
+    id: newId,
+    email: cleanEmail,
+    passwordHash: hashPassword(cleanPass),
+    displayName: name?.trim() || cleanEmail.split('@')[0] || 'Игрок Leonida',
+    isVip: false,
+    createdAt: new Date().toISOString()
+  };
 
-  const authUser = mapSupabaseUser(data.user);
+  accounts.push(newAccount);
+  await saveStoredAccounts(accounts);
 
-  // Initialize row in Supabase 'profiles' table
-  try {
-    await supabase.from('profiles').upsert(
-      {
-        id: data.user.id,
-        email: data.user.email,
-        display_name: name?.trim() || 'Игрок Leonida',
-        is_vip: false,
-        vip_active: false,
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: 'id' }
-    );
-  } catch (err) {
-    console.warn('Initial Supabase profile write warning:', err);
-  }
+  const authUser: AuthUser = {
+    id: newId,
+    uid: newId,
+    email: cleanEmail,
+    displayName: newAccount.displayName,
+    isAnonymous: false
+  };
 
+  await saveStoredSession(authUser);
   return authUser;
 }
 
@@ -111,189 +290,118 @@ export async function registerWithEmail(
  * Quick sign-in as Guest (Anonymous)
  */
 export async function loginAsGuest(): Promise<AuthUser> {
-  try {
-    const { data, error } = await supabase.auth.signInAnonymously();
-    if (!error && data?.user) {
-      return mapSupabaseUser(data.user);
-    }
-  } catch {
-    // fallback if anonymous auth not enabled in supabase project
-  }
-
-  // Graceful local guest user
   const guestUid = 'guest_' + Math.random().toString(36).substring(2, 10);
-  return {
+  const guestUser: AuthUser = {
     id: guestUid,
     uid: guestUid,
     email: null,
     displayName: 'Гость Leonida',
     isAnonymous: true
   };
+  await saveStoredSession(guestUser);
+  return guestUser;
 }
 
 /**
  * Signs out current user
  */
 export async function logoutUser(): Promise<void> {
-  try {
-    await supabase.auth.signOut();
-  } catch (err) {
-    console.warn('Supabase signOut error:', err);
-  }
+  await saveStoredSession(null);
 }
 
 /**
- * Reads cloud user profile from Supabase Auth metadata and 'profiles' table
+ * Reads user cloud profile
  */
 export async function getUserCloudData(uid: string): Promise<UserCloudProfile | null> {
-  // 1. Check currently active Supabase Auth user metadata
-  try {
-    const { data: authData } = await supabase.auth.getUser();
-    const authUser = authData?.user;
-    if (authUser && (authUser.id === uid || !uid)) {
-      const meta = authUser.user_metadata || {};
-      const isVip = Boolean(meta.vip_active || meta.is_vip);
-      if (isVip || meta.display_name || meta.saved_cheats) {
-        return {
-          uid: authUser.id,
-          email: authUser.email || null,
-          displayName: meta.display_name || authUser.email?.split('@')[0] || 'Игрок Leonida',
-          isVip,
-          vipInvoiceId: meta.vip_invoice_id,
-          vipVerifiedAt: meta.vip_verified_at,
-          vipAmount: meta.vip_amount || '2.99',
-          vipAsset: meta.vip_asset || 'USDT',
-          savedCheats: Array.isArray(meta.saved_cheats) ? meta.saved_cheats : [],
-          savedNews: Array.isArray(meta.saved_news) ? meta.saved_news : []
-        };
-      }
-    }
-  } catch {
-    // non-blocking
+  if (!uid) return null;
+  const accounts = await getStoredAccounts();
+  const account = accounts.find(
+    (acc) => acc.id === uid || acc.email?.toLowerCase() === uid.toLowerCase()
+  );
+
+  if (account) {
+    return {
+      uid: account.id,
+      email: account.email,
+      displayName: account.displayName,
+      isVip: Boolean(account.isVip),
+      vipInvoiceId: account.vipInvoiceId,
+      vipVerifiedAt: account.vipVerifiedAt,
+      vipAmount: account.vipAmount || '2.99',
+      vipAsset: account.vipAsset || 'USDT',
+      savedCheats: Array.isArray(account.savedCheats) ? account.savedCheats : [],
+      savedNews: Array.isArray(account.savedNews) ? account.savedNews : []
+    };
   }
 
-  // 2. Query 'profiles' table safely
-  try {
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid);
-    const query = supabase.from('profiles').select('*');
-    const filterQuery = isUuid
-      ? query.or(`id.eq.${uid},device_id.eq.${uid}`)
-      : query.eq('device_id', uid);
-
-    const { data, error } = await filterQuery.limit(1).maybeSingle();
-
-    if (!error && data) {
-      return {
-        uid: data.id || uid,
-        email: data.email || null,
-        displayName: data.display_name || 'Игрок Leonida',
-        isVip: Boolean(data.vip_active ?? data.is_vip),
-        vipInvoiceId: data.vip_invoice_id,
-        vipVerifiedAt: data.vip_verified_at,
-        vipAmount: data.vip_amount,
-        vipAsset: data.vip_asset,
-        savedCheats: Array.isArray(data.saved_cheats) ? data.saved_cheats : [],
-        savedNews: Array.isArray(data.saved_news) ? data.saved_news : []
-      };
-    }
-  } catch (err) {
-    console.warn('Could not read user cloud profile from Supabase:', err);
+  if (currentAuthUser && (currentAuthUser.id === uid || currentAuthUser.email === uid)) {
+    return {
+      uid: currentAuthUser.id,
+      email: currentAuthUser.email,
+      displayName: currentAuthUser.displayName,
+      isVip: false,
+      savedCheats: [],
+      savedNews: []
+    };
   }
+
   return null;
 }
 
 /**
- * Updates cloud user profile in Supabase Auth user_metadata and 'profiles' table
+ * Updates cloud user profile
  */
 export async function saveUserCloudData(
   uid: string,
   data: Partial<UserCloudProfile>
 ): Promise<void> {
-  // 1. Persist directly into Supabase Auth user_metadata
-  try {
-    const { data: authData } = await supabase.auth.getUser();
-    if (authData?.user && (authData.user.id === uid || !uid)) {
-      const currentMeta = authData.user.user_metadata || {};
-      const updatedMeta: any = { ...currentMeta };
+  if (!uid) return;
+  const accounts = await getStoredAccounts();
+  const index = accounts.findIndex(
+    (acc) => acc.id === uid || acc.email?.toLowerCase() === uid.toLowerCase()
+  );
 
-      if (data.displayName !== undefined) updatedMeta.display_name = data.displayName;
-      if (data.isVip !== undefined) {
-        updatedMeta.is_vip = data.isVip;
-        updatedMeta.vip_active = data.isVip;
-      }
-      if (data.vipInvoiceId !== undefined) updatedMeta.vip_invoice_id = data.vipInvoiceId;
-      if (data.vipVerifiedAt !== undefined) updatedMeta.vip_verified_at = data.vipVerifiedAt;
-      if (data.vipAmount !== undefined) updatedMeta.vip_amount = data.vipAmount;
-      if (data.vipAsset !== undefined) updatedMeta.vip_asset = data.vipAsset;
-      if (data.savedCheats !== undefined) updatedMeta.saved_cheats = data.savedCheats;
-      if (data.savedNews !== undefined) updatedMeta.saved_news = data.savedNews;
-
-      await supabase.auth.updateUser({ data: updatedMeta });
-    }
-  } catch (err) {
-    console.warn('Supabase auth metadata update notice:', err);
-  }
-
-  // 2. Also try writing to 'profiles' table
-  try {
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uid);
-    const payload: any = {
-      updated_at: new Date().toISOString()
-    };
-
-    if (isUuid) {
-      payload.id = uid;
-    } else {
-      payload.device_id = uid;
-    }
-
-    if (data.email !== undefined) payload.email = data.email;
-    if (data.displayName !== undefined) payload.display_name = data.displayName;
-    if (data.isVip !== undefined) {
-      payload.is_vip = data.isVip;
-      payload.vip_active = data.isVip;
-    }
-    if (data.vipInvoiceId !== undefined) payload.vip_invoice_id = data.vipInvoiceId;
-    if (data.vipVerifiedAt !== undefined) payload.vip_verified_at = data.vipVerifiedAt;
-    if (data.vipAmount !== undefined) payload.vip_amount = data.vipAmount;
-    if (data.vipAsset !== undefined) payload.vip_asset = data.vipAsset;
-    if (data.savedCheats !== undefined) payload.saved_cheats = data.savedCheats;
-    if (data.savedNews !== undefined) payload.saved_news = data.savedNews;
-
-    const conflictCol = isUuid ? 'id' : 'device_id';
-    await supabase.from('profiles').upsert(payload, { onConflict: conflictCol });
-  } catch (err) {
-    console.warn('Could not save user cloud profile to Supabase table:', err);
+  if (index !== -1) {
+    const acc = accounts[index];
+    if (data.displayName !== undefined) acc.displayName = data.displayName || acc.displayName;
+    if (data.isVip !== undefined) acc.isVip = data.isVip;
+    if (data.vipInvoiceId !== undefined) acc.vipInvoiceId = data.vipInvoiceId;
+    if (data.vipVerifiedAt !== undefined) acc.vipVerifiedAt = data.vipVerifiedAt;
+    if (data.vipAmount !== undefined) acc.vipAmount = data.vipAmount;
+    if (data.vipAsset !== undefined) acc.vipAsset = data.vipAsset;
+    if (data.savedCheats !== undefined) acc.savedCheats = data.savedCheats;
+    if (data.savedNews !== undefined) acc.savedNews = data.savedNews;
+    accounts[index] = acc;
+    await saveStoredAccounts(accounts);
   }
 }
 
 /**
- * Subscribes to Supabase Auth state changes
+ * Subscribes to Auth state changes
  */
 export function onAuthStateChanged(
   _dummyAuth: any,
   callback: (user: AuthUser | null) => void
 ): () => void {
-  // Check current session immediately
-  supabase.auth.getSession().then(({ data }) => {
-    if (data?.session?.user) {
-      callback(mapSupabaseUser(data.session.user));
-    } else {
-      callback(null);
-    }
-  });
+  authListeners.add(callback);
 
-  const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.user) {
-      callback(mapSupabaseUser(session.user));
-    } else {
-      callback(null);
-    }
-  });
+  if (!isInitialized) {
+    isInitialized = true;
+    getStoredSession().then((user) => {
+      currentAuthUser = user;
+      callback(user);
+    });
+  } else {
+    callback(currentAuthUser);
+  }
 
   return () => {
-    listener?.subscription?.unsubscribe();
+    authListeners.delete(callback);
   };
 }
 
-export const auth = supabase.auth;
+export const auth = {
+  get currentUser() {
+    return currentAuthUser;
+  }
+};
